@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body { width:960px; height:620px; background:#241d28; font-family:"Microsoft YaHei",sans-serif; overflow:hidden; }
+  /* 模拟游戏画面背景 */
+  .scene { position:absolute; inset:0; background:
+    radial-gradient(ellipse at 20% 80%, #3a6b45 0%, transparent 55%),
+    radial-gradient(ellipse at 85% 20%, #4a7ab8 0%, transparent 50%),
+    linear-gradient(180deg, #5b8ec9 0%, #7ab0d8 38%, #4e7d4e 39%, #2f5432 100%); }
+  .panel { position:absolute; left:120px; top:36px; width:720px; height:548px;
+    background:#2b2331; border:1px solid #4a3d52; border-radius:14px;
+    box-shadow:0 18px 50px rgba(0,0,0,.55); overflow:hidden; }
+  .title { height:36px; background:#221a29; display:flex; align-items:center; padding:0 14px;
+    color:#cfc3d8; font-size:13px; border-bottom:1px solid #3c3145; }
+  .title .dots { margin-left:auto; color:#7a6b86; letter-spacing:6px; }
+  .card { margin:22px auto; width:600px; background:#332a3c; border:1px solid #4d4058;
+    border-radius:12px; padding:22px 26px; }
+  .card h2 { color:#f2e9f5; font-size:19px; margin-bottom:6px; }
+  .card .sub { color:#a998b8; font-size:13px; margin-bottom:16px; }
+  .mode { display:flex; gap:10px; margin-bottom:18px; }
+  .mode .btn { padding:8px 18px; border-radius:18px; font-size:13px; cursor:default; }
+  .mode .on  { background:#e78aa8; color:#2b2331; font-weight:bold; }
+  .mode .off { background:#443a50; color:#b8a8c6; }
+  .qrwrap { display:flex; gap:22px; align-items:flex-start; }
+  .qr { width:236px; height:236px; background:#fff; border-radius:10px; padding:10px;
+    display:flex; align-items:center; justify-content:center; }
+  .qr img { width:100%; height:100%; image-rendering:pixelated; }
+  .tips { flex:1; color:#c6b7d4; font-size:13px; line-height:1.9; }
+  .tips b { color:#f2e9f5; }
+  .tips .step { display:flex; gap:8px; margin-bottom:10px; }
+  .tips .num { width:20px; height:20px; border-radius:50%; background:#e78aa8; color:#2b2331;
+    font-size:12px; font-weight:bold; display:flex; align-items:center; justify-content:center; flex-shrink:0; margin-top:2px; }
+  .btns { display:flex; gap:12px; margin-top:20px; }
+  .btns .b1 { background:#e78aa8; color:#2b2331; font-weight:bold; }
+  .btns .b2 { background:#443a50; color:#d5c6e2; }
+  .btns div { padding:9px 26px; border-radius:8px; font-size:13px; }
+  .status { margin-top:14px; color:#8fd98f; font-size:12px; }
+</style>
+</head>
+<body>
+<div class="scene"></div>
+<div class="panel">
+  <div class="title">PeakMusic<span style="margin-left:24px;color:#7a6b86;font-size:12px">按住标题拖动 · Ctrl+滚轮缩放</span><span class="dots">— □ ×</span></div>
+  <div class="card">
+    <h2>QQ音乐扫码登录</h2>
+    <div class="sub">在面板里直接扫码，不用抓包不用复制 Cookie</div>
+    <div class="mode">
+      <div class="btn on">改用 QQ 音乐 App 扫码</div>
+      <div class="btn off">改用手机 QQ 扫码</div>
+    </div>
+    <div class="qrwrap">
+      <div class="qr"><img src="qr-fake.png" alt=""></div>
+      <div class="tips">
+        <div class="step"><div class="num">1</div><div>打开手机 <b>QQ 音乐 App</b> → 右上角「扫一扫」</div></div>
+        <div class="step"><div class="num">2</div><div>扫左边这张码（15 分钟内有效）</div></div>
+        <div class="step"><div class="num">3</div><div>手机上点 <b>「确认登录」</b>，面板自动完成</div></div>
+        <div style="margin-top:12px;color:#8a7a99;font-size:12px;line-height:1.8">
+          扫不出来？点「从剪贴板导入」粘贴网页 Cookie 也能登录。<br>
+          微信登录的 QQ 音乐账号同样支持——确认按钮会显示「微信登录」。
+        </div>
+      </div>
+    </div>
+    <div class="btns">
+      <div class="b1">换一张</div>
+      <div class="b2">从剪贴板导入</div>
+      <div class="b2">关闭</div>
+    </div>
+    <div class="status">● 等待扫码…（二维码 15 分钟内有效）</div>
+  </div>
+</div>
+</body>
+</html>

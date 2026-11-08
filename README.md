@@ -1,101 +1,164 @@
-# PeakMusic — PEAK 音乐 Mod
+# PEAK Music Player（PeakMusic）
 
-按 `D:\QQ\PEAK音乐Mod-施工流程.md` 施工。当前进度：**阶段 1 四条闸门全过；阶段 2 协议层已跑通（搜索 / 歌词 / 免费曲直链 / 扫码登录）**。
+> 在 PEAK 游戏里听歌的 BepInEx 插件 —— 搜索网易云音乐 / QQ音乐直接放歌，3D 悬浮歌词跟着视角走，联机「一起听」全房间同步，游戏内扫码登录。
 
-## 工程结构
+爬山再累，也要有 BGM。按一下快捷键，搜索框敲歌名，点一行就播——不切窗口、不戴第二副耳机。
+
+![PEAK Music Player](docs/images/hero.jpg)
+
+---
+
+## 功能
+
+1. **搜索播放**：面板输入歌名/歌手/歌词关键词，点一行即播。网易云音乐、QQ音乐双平台可切换，搜索各查各的、结果分页浏览；免费曲不登录也能放。
+
+2. **3D 悬浮歌词**：世界空间实时歌词，屏幕两侧交替浮现、逐字点亮，跟着视角走不挡准星。字号 / 高度 / 左右位置 / 离镜头距离 / 已唱·未唱·翻译三色 / 发光强度全部可调，有翻译时副行小字跟随；自动跳过「词：xxx 曲：xxx」这类制作信息行。默认开箱即用，放歌自动出现。
+
+3. **联机一起听**：全房间装同版本即可用。房主放歌 → 全房间同步播放（进度 / 暂停 / 切歌）；队友在自己面板点歌 → 进房主的「♪ 一起听」队列（显示歌名+谁点的），房主点「批准」即播，放完自动接播下一首。
+
+4. **谁点的歌用谁的会员**：点歌人先用自己的账号取播放直链随点歌发给房主，房主批准时直接播这条直链——房主没有会员也能放客机点的 VIP 曲；免费曲谁点都能放；两边都没权限的付费曲会明确提示原因，不装死。
+
+5. **游戏内扫码登录**：面板里直接扫码（QQ 音乐 App / 手机 QQ 均可，微信登录的 QQ 音乐账号也支持），手机确认即完成，不用抓包不用复制 Cookie。网易云同样支持扫码。扫不出来还可以「从剪贴板导入」Cookie 兜底。
+
+6. **收藏与记忆**：♡ 收藏常听的歌随时重播；搜索框带最近搜过的词，点标签直接再搜。
+
+7. **面板随心调**：标题栏拖动、Ctrl+滚轮缩放（0.7–1.5）、4 款主题配色（丝绒玫瑰 / 午夜石墨 / 极光海 / 曜石红）、折叠成迷你条、位置自动记忆。
+
+---
+
+## 截图展示
+
+**主面板**（`F1` 打开）——搜索、结果列表、左侧歌词调节与平台切换，实拍画面：
+
+![主面板](docs/images/panel-search-netease.jpg)
+
+中英文歌都能搜（网易云）：
+
+![英文搜索](docs/images/panel-search-en.jpg)
+
+切到 QQ音乐标签，搜索只查 QQ 音乐：
+
+![QQ音乐搜索](docs/images/panel-search-qq.jpg)
+
+**扫码登录卡片**——支持 QQ 音乐 App 扫码 / 手机 QQ 扫码两种方式：
+
+![扫码登录](docs/images/shot-login.png)
+
+**联机一起听队列**——队友点的歌在这里，点「批准」即播：
+
+![一起听队列](docs/images/shot-queue.png)
+
+---
+
+## 安装
+
+**mod 管理器（推荐）**：在 Thunderstore / mod 管理器里搜 `PeakMusic` 安装即可，前置 BepInExPack_PEAK 会自动带上。
+
+**手动安装**：
+
+1. 先装 [BepInExPack_PEAK](https://thunderstore.io/c/peak/p/bepinex/BepInExPack_PEAK/)（5.4.75301）
+2. 把压缩包里的 `plugins/PeakMusic` 文件夹复制到 `PEAK/BepInEx/plugins/` 下
+3. 重启游戏，进游戏后按 `F1` 打开面板
+
+---
+
+## 使用方法
+
+| 按键 | 功能 |
+|---|---|
+| `F1` | 打开/关闭面板（可在配置文件中改键，支持写多个备用键） |
+| `F4` | 3D 歌词开/关（可在配置文件中改键） |
+| 鼠标点击搜索框（或按 `T`） | 进入输入态打字，回车搜索 |
+| 点结果列表某一行 | 播放这首歌 |
+| `Esc` | 退出输入态（面板不关） |
+| 标题栏拖动 / Ctrl+滚轮 | 移动面板 / 缩放面板 |
+
+面板里可以：
+
+- 切「网易云 / QQ音乐」标签换平台；「未登录」行点开扫码登录
+- 左侧实时调节歌词：颜色（含薄荷绿等预设）、高度、左右位置、距离、字号
+- 「♡ 收藏」查看收藏列表一键重播；搜索框下点最近搜索标签快速重搜
+- 「♪ 一起听」查看队友点歌队列，批准 / 移出
+- 右上角切换 4 款主题配色；面板可折叠成一条迷你标题栏
+
+---
+
+## 数据文件
 
 ```
-PeakMusic.sln
-├─ PeakMusic.Core/      类库 net472 —— 纯 C#，零 Unity 依赖（节流、加密、API、模型、歌词）
-├─ PeakMusic.Sandbox/   控制台 net472 —— 协议层在这里跑，2 秒出结果，不进游戏
-└─ PeakMusic/           BepInEx 5 插件 —— 只做 Unity 侧；编译后自动部署到游戏 plugins
+%APPDATA%\PeakMusic\cookie.txt        网易云登录态（MUSIC_U 等 3 项）
+%APPDATA%\PeakMusic\qq_cookie.txt     QQ音乐登录态（musickey 等）
+%APPDATA%\PeakMusic\favorites.txt     收藏列表
+%APPDATA%\PeakMusic\history.txt       最近搜索词
+BepInEx\config\com.peakmusic.probe.cfg  全部配置
 ```
 
-## 构建
+- 登录态只存在你自己电脑上，**不上传任何服务器**；删除文件即退出登录，随时可以自己检查内容
+- 收藏 / 搜索历史 / 面板位置都是纯本地文本，重启游戏自动保留
+
+---
+
+## 配置项（`BepInEx/config/com.peakmusic.probe.cfg`）
+
+| 配置 | 默认值 | 说明 |
+|---|---|---|
+| 界面 / PanelKey | `F1` | 面板开关热键，可写多个（如 `F1,F8`） |
+| 界面 / Theme | 0 | 面板配色：0=丝绒玫瑰 1=午夜石墨 2=极光海 3=曜石红 |
+| 界面 / PanelScale | 1 | 面板缩放 0.7–1.5（Ctrl+滚轮也能调） |
+| 界面 / PanelCollapsed | false | 打开时是否折叠成迷你条 |
+| 歌词 / Enabled | true | 3D 歌词总开关（放歌自动出现） |
+| 歌词 / Hotkey | `F4` | 歌词开关键（别和 PanelKey 撞键） |
+| 歌词 / Size | 84 | 歌词字号（屏幕像素高度，2K/4K 自动放大） |
+| 歌词 / Y | 0.62 | 句子中心高度，0=屏幕顶 1=屏幕底 |
+| 歌词 / Edge | 0.4 | 句子离屏幕边缘的远近 |
+| 歌词 / Distance | 12 | 文字平面离镜头多远 |
+| 歌词 / ColorLit | `A6F07A` | 已唱部分字色（十六进制，面板可切换预设） |
+| 歌词 / Translation | true | 有翻译时显示副行 |
+| 歌词 / FilterMeta | true | 跳过「词：xxx」等制作信息行 |
+| 音源 / Platform | 0 | 当前音源：0=网易云 1=QQ音乐 |
+
+改配置文件后需重启游戏；面板上直接点的都是立即生效。
+
+---
+
+## 工作原理（给在意安全性的玩家）
+
+- **代码完全开源**：登录、取流、播放的每一行代码都可以在本仓库审查，没有混淆、没有闭源组件
+- **登录态只存本地**：扫码走的是网易云 / QQ音乐官方登录授权；拿到的 Cookie 只写进你本机的 `%APPDATA%\PeakMusic\` 文本文件，不经过任何第三方服务器
+- **播放直连官方音源**：音频从网易云 / QQ音乐的官方 CDN 直接拉取，mod 不代理、不抓取、不存储音频文件
+- **一起听只在房间内通信**：队列和播放同步走游戏联机通道（Photon），只同步歌名/曲号/进度这类必要信息；点歌人取的播放直链只发给同房间的房主
+- **不改动游戏文件**：仅作为 BepInEx 插件加载，不修改任何游戏 DLL，删掉文件夹即彻底卸载
+
+---
+
+## 前置
+
+- [BepInExPack_PEAK](https://thunderstore.io/c/peak/p/bepinex/BepInExPack_PEAK/) 5.4.75301（mod 管理器会自动安装）
+
+---
+
+## 常见问题
+
+- **提示 -110 / 无权限**：看提示区分——「还没登录」→ 扫码登录再试；「已登录但没有这首歌的权限」→ 那首是会员/付费曲，换一首或用有权限的账号点
+- **一起听对面没声音**：确认两边装的是**同版本** PeakMusic（启动日志第一行版本号一致）、且在同一房间
+- **歌词撞键失效**：`[歌词] Hotkey` 和面板键写成同一个键会自动失效，改开一个就行
+- **改了设置没反应**：改 cfg 文件要重启游戏
+
+---
+
+## 开发
 
 ```powershell
-cd C:\Users\Admin\WorkBuddy\2026-11-07-20-32-32\PeakMusic
-C:\Users\Admin\.dotnet\dotnet.exe build -c Release
+git clone https://github.com/pht5740/PEAK-Music-Player.git
+cd PEAK-Music-Player
+dotnet build -c Release   # 需要 .NET SDK 8，编译后自动部署到游戏 plugins 目录
 ```
 
-- SDK：`C:\Users\Admin\.dotnet`（8.0.427，由 `global.json` 锁定；机器 PATH 上的 `dotnet` 只有运行时，不能用）
-- 目标框架 `net472`，引用全部来自 `D:\Steam\steamapps\common\PEAK`，`<Private>false</Private>` 一个都不复制
-- `AfterTargets="Build"` 自动把 `PeakMusic.dll` 复制到 `BepInEx\plugins\PeakMusic\`
+工程结构：`PeakMusic.Core`（纯 C# 协议层：搜索/取流/登录/歌词）→ `PeakMusic`（BepInEx 插件：面板/播放器/3D 歌词）→ `PeakMusic.Sandbox`（协议层命令行测试）。构建细节见 `notes.md`。
 
-## 沙盒
+---
 
-```powershell
-$exe = ".\PeakMusic.Sandbox\bin\Release\net472\PeakMusic.Sandbox.exe"
+## 致谢
 
-# 阶段 1（网络音频链路）
-& $exe env                              # 运行时 + 游戏依赖 + 节流器自检
-& $exe url   https://xxx.mp3            # 拉前 1KB，判断是不是真音频直链（几毫秒）
-& $exe speed https://xxx.mp3 4194304    # 实拉 4MB 量带宽，并算出"整首要多久"
-& $exe netease 186016                   # 网易外链探针（匿名已失效，见 docs）
-
-# 阶段 2（协议层，全部不需要 weapi 加密）
-& $exe search 雨爱 30                   # 搜 30 首，打印 fee / 无版权标记
-& $exe song   3443155291 exhigh         # 取播放地址 + 自动验直链 + 打印前几行歌词
-& $exe lyric  316100                    # 只看歌词
-& $exe login                            # 扫码登录（打印链接 → 浏览器打开 → 手机扫码）
-& $exe me                               # 当前账号
-& $exe logout                           # 清掉本地登录态
-```
-
-登录态存在 `%APPDATA%\PeakMusic\cookie.txt`，只保留 `MUSIC_U` / `__csrf` / `NMTID` 等 5 项，不存账号密码。
-
-**免费曲目（`fee=0`）匿名就能拿到直链**，登录只影响会员曲库——所以不登录也能跑通"搜索→播放"。
-
-**换音源前先 `speed` 测一下。** 实测本机到 soundhelix.com 只有 27 KB/s，8.7 MB 要 323 秒，
-这种源拿来当测试素材只会浪费时间。
-
-## 本机测试音频服务
-
-```powershell
-& "C:\Users\Admin\.workbuddy\binaries\python\versions\3.13.12\python.exe" `
-  "C:\Users\Admin\WorkBuddy\2026-11-07-20-32-32\PeakMusic\testmedia\serve.py" 8765
-```
-
-- 素材：`testmedia\test-song.mp3`（3.69 MB，3.6 分钟，够测 seek）
-- `serve.py` **支持 Range**（`python -m http.server` 不支持），行为和真实 CDN 一致
-- 走本机是为了绕开公网带宽：Unity 的请求/解码/播放/seek 代码路径完全一样，只是快
-
-
-## 阶段 1 怎么验收（已过，2026-11-07）
-
-结果在 `notes.md`：起播 46 ms、seek 60s 落位、20 次切歌 660→660、退出干净。
-
-1. 启动 PEAK，主菜单；
-2. `F7` 起播 → `F8` seek 到 60s → `F9` 暂停恢复 → `F10` 压测 20 次 → `F11` 停止；
-3. 可选：`F5` 走 512 KB/s 限速链路，验证"边下边播"是否真生效（见下）；
-4. 看 `D:\Steam\steamapps\common\PEAK\BepInEx\LogOutput.log` 里 `[探针]` 开头的行；
-
-限速链路（F5 用，端口 8766，512 KB/s）：
-
-```powershell
-& "C:\Users\Admin\.workbuddy\binaries\python\versions\3.13.12\python.exe" `
-  "C:\Users\Admin\WorkBuddy\2026-11-07-20-32-32\PeakMusic\testmedia\serve.py" 8766 512
-```
-
-配置在 `BepInEx\config\com.peakmusic.probe.cfg`（UrlA / UrlB / UrlSlow / SeekSeconds / Volume / TimeoutSeconds）。
-
-## 阶段 3 面板（游戏内点歌）
-
-启动 PEAK 后按 **F1**（备用 **F2**）打开面板，屏幕居中：
-
-1. 点搜索框或按 **T** 进入输入态，打字 → **回车**搜索（中文打不进去就点预设词：雨爱/下雨天/江南/晴天）
-2. 结果列表里**点一行** → 取播放地址 → 出声
-3. 底部按钮：暂停/继续 / 停止 / 音量 −/+；`Esc` 退出输入态（面板不关，留给游戏自己的 Esc 菜单）
-
-日志前缀：`[面板]`（搜索、取地址、失败原因）、`[播放器]`（起播、缓冲、清理）。
-
-面板逻辑在 `PeakMusic/MusicPanel.cs`，播放器在 `PeakMusic/MusicPlayer.cs`。
-提醒：点歌时游戏仍在收键盘，**输入最好在主菜单/暂停时做**，否则 WASD 会同时控制角色。
-
-> **范围声明（2026-11-07 决定）**：本插件是**纯手动点歌机**，不做「下雨时自动切歌」。
-> 不 patch 天气状态机、不订阅任何游戏事件，播放完全由玩家操作触发。
-
-## 已知修正
-
-见 `docs/施工流程-修订.md`。最要紧的一条：**网易 `outer/url` 外链匿名请求已失效**，
-阶段 1 不要用它当素材。
+- [BepInEx](https://github.com/BepInEx/BepInEx) —— 插件框架
+- 感谢所有帮忙测试的朋友们

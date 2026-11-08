@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body { width:960px; height:620px; background:#241d28; font-family:"Microsoft YaHei",sans-serif; overflow:hidden; }
+  .scene { position:absolute; inset:0; background:
+    radial-gradient(ellipse at 25% 75%, #3a6b45 0%, transparent 55%),
+    radial-gradient(ellipse at 85% 25%, #4a7ab8 0%, transparent 50%),
+    linear-gradient(180deg, #5b8ec9 0%, #7ab0d8 38%, #4e7d4e 39%, #2f5432 100%); }
+  .panel { position:absolute; left:100px; top:26px; width:760px; height:568px;
+    background:#2b2331; border:1px solid #4a3d52; border-radius:14px;
+    box-shadow:0 18px 50px rgba(0,0,0,.55); overflow:hidden; display:flex; flex-direction:column; }
+  .title { height:36px; background:#221a29; display:flex; align-items:center; padding:0 14px;
+    color:#cfc3d8; font-size:13px; border-bottom:1px solid #3c3145; flex-shrink:0; }
+  .title .dots { margin-left:auto; color:#7a6b86; letter-spacing:6px; }
+  .body { display:flex; flex:1; min-height:0; }
+  .nav { width:132px; background:#241d2c; border-right:1px solid #3c3145; padding:14px 10px; flex-shrink:0; }
+  .nav .item { padding:10px 12px; border-radius:9px; margin-bottom:8px; font-size:13px; color:#b8a8c6; }
+  .nav .item small { display:block; font-size:10px; color:#7a6b86; margin-top:2px; }
+  .nav .item.on { background:#e78aa8; color:#2b2331; font-weight:bold; }
+  .nav .item.on small { color:#5c3044; }
+  .main { flex:1; padding:18px 22px; display:flex; flex-direction:column; min-width:0; }
+  h1 { color:#f2e9f5; font-size:18px; margin-bottom:4px; }
+  .sub { color:#a998b8; font-size:12px; margin-bottom:16px; }
+  .row { display:flex; align-items:center; gap:12px; background:#332a3c; border:1px solid #4d4058;
+    border-radius:10px; padding:11px 14px; margin-bottom:10px; }
+  .cover { width:40px; height:40px; border-radius:7px; flex-shrink:0;
+    background:linear-gradient(135deg,#e78aa8,#8a6bb8); }
+  .cover.c2 { background:linear-gradient(135deg,#f0b26e,#c96a4e); }
+  .cover.c3 { background:linear-gradient(135deg,#6ec9b8,#4e7dc9); }
+  .cover.c4 { background:linear-gradient(135deg,#b8d06e,#6ea04e); }
+  .info { flex:1; min-width:0; }
+  .info .name { color:#f2e9f5; font-size:14px; }
+  .info .meta { color:#a998b8; font-size:12px; margin-top:3px; }
+  .tag { font-size:11px; padding:3px 9px; border-radius:10px; flex-shrink:0; }
+  .tag.vip { background:#5c3044; color:#f0a0c0; }
+  .tag.free { background:#2e4a35; color:#8fd98f; }
+  .tag.pend { background:#4a4030; color:#e8c880; }
+  .act { display:flex; gap:8px; flex-shrink:0; }
+  .act .ok { background:#e78aa8; color:#2b2331; font-weight:bold; font-size:12px; padding:7px 14px; border-radius:7px; }
+  .act .no { background:#443a50; color:#c0b0d0; font-size:12px; padding:7px 12px; border-radius:7px; }
+  .statusbar { margin-top:auto; background:#221a29; border-top:1px solid #3c3145;
+    padding:9px 14px; font-size:11px; color:#8a7a99; border-radius:0 0 13px 13px; }
+  .statusbar b { color:#8fd98f; }
+</style>
+</head>
+<body>
+<div class="scene"></div>
+<div class="panel">
+  <div class="title">PeakMusic<span style="margin-left:24px;color:#7a6b86;font-size:12px">按住标题拖动 · Ctrl+滚轮缩放</span><span class="dots">— □ ×</span></div>
+  <div class="body">
+    <div class="nav">
+      <div class="item">网易云<small>点击切换</small></div>
+      <div class="item">QQ音乐<small>点击切换</small></div>
+      <div class="item">♡ 收藏<small>点击查看</small></div>
+      <div class="item on">♪ 一起听<small>点击展开</small></div>
+    </div>
+    <div class="main">
+      <h1>♪ 一起听 — 点歌队列</h1>
+      <div class="sub">队友点的歌都在这里，点「批准」即播；放完自动接播下一首</div>
+
+      <div class="row">
+        <div class="cover"></div>
+        <div class="info">
+          <div class="name">雨爱</div>
+          <div class="meta">杨丞琳 · 小明点的 · 已在取直链</div>
+        </div>
+        <div class="tag vip">VIP 曲</div>
+        <div class="act"><div class="ok">批准播放</div><div class="no">✕</div></div>
+      </div>
+
+      <div class="row">
+        <div class="cover c2"></div>
+        <div class="info">
+          <div class="name">牵丝戏</div>
+          <div class="meta">银临 / 音频怪物 · 阿鲤点的 · 谁点的用谁的会员</div>
+        </div>
+        <div class="tag free">免费</div>
+        <div class="act"><div class="ok">批准播放</div><div class="no">✕</div></div>
+      </div>
+
+      <div class="row">
+        <div class="cover c3"></div>
+        <div class="info">
+          <div class="name">365里路</div>
+          <div class="meta">文章 · 咸鱼点的 · 等待中</div>
+        </div>
+        <div class="tag pend">排队中</div>
+        <div class="act"><div class="ok">批准播放</div><div class="no">✕</div></div>
+      </div>
+
+      <div class="row">
+        <div class="cover c4"></div>
+        <div class="info">
+          <div class="name">古月照今尘</div>
+          <div class="meta">文章 · 咸鱼点的 · 等待中</div>
+        </div>
+        <div class="tag free">免费</div>
+        <div class="act"><div class="ok">批准播放</div><div class="no">✕</div></div>
+      </div>
+
+      <div class="statusbar">全房间装同版本 PeakMusic 即自动同步 · <b>房主放歌全队一起听</b> · 付费曲谁点的用谁的权限，两边都没权限才会跳过</div>
+    </div>
+  </div>
+</div>
+</body>
+</html>
