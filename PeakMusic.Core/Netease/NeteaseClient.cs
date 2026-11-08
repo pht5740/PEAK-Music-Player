@@ -56,6 +56,10 @@ namespace PeakMusic.Core.Netease
         }
 
         private readonly HttpClient _http;
+
+        // r44：/api/ 请求专用——不带 CookieContainer，Cookie 头手动拼（与 QQ 取流修复同因：
+        // Unity 的 Mono 在游戏里会把容器 cookie 发坏，fee=8 的歌一律 404、匿名反而能拿直链）。
+        private readonly HttpClient _plainHttp;
         private readonly CookieContainer _cookies = new CookieContainer();
         private readonly Throttle _throttle;
         private readonly Uri _root = new Uri(BaseUri);
@@ -91,6 +95,21 @@ namespace PeakMusic.Core.Netease
             {
                 Timeout = TimeSpan.FromSeconds(20)
             };
+
+            // r44：明文 /api/ 也走手动 Cookie 头（见 _plainHttp 字段注释）
+            _plainHttp = new HttpClient(new HttpClientHandler
+            {
+                UseCookies = false,
+                AllowAutoRedirect = true,
+                AutomaticDecompression = DecompressionMethods.GZip | DecompressionMethods.Deflate,
+            })
+            {
+                Timeout = TimeSpan.FromSeconds(20)
+            };
+            _plainHttp.DefaultRequestHeaders.TryAddWithoutValidation("User-Agent", UserAgent);
+            _plainHttp.DefaultRequestHeaders.TryAddWithoutValidation("Referer", "https://music.163.com/");
+            _plainHttp.DefaultRequestHeaders.TryAddWithoutValidation("Origin", "https://music.163.com");
+            _plainHttp.DefaultRequestHeaders.TryAddWithoutValidation("Accept", "*/*");
 
             // 把磁盘上的登录态灌回 CookieContainer
             LoadCookiesIntoContainer(CookieStore.Load());
@@ -380,15 +399,24 @@ namespace PeakMusic.Core.Netease
                         req.Content = new FormUrlEncodedContent(list);
                     }
 
-                    using (var resp = await _http.SendAsync(req).ConfigureAwait(false))
+                    // r44：Cookie 头手动带（_plainHttp 不带容器，见字段注释）
+                    string ck = CookieText;
+                    if (!string.IsNullOrEmpty(ck))
+                        req.Headers.TryAddWithoutValidation("Cookie", ck);
+
+                    using (var resp = await _plainHttp.SendAsync(req).ConfigureAwait(false))
                     {
                         string body = await resp.Content.ReadAsStringAsync().ConfigureAwait(false);
+                        _lastRaw = body;
                         HarvestCookies();
                         return body;
                     }
                 }
             }).ConfigureAwait(false);
         }
+
+        /// <summary>最近一次 /api/ 原始响应（短截后进失败提示，排查取流被拒用）。</summary>
+        private volatile string _lastRaw = "";
 
         /// <summary>
         /// 发请求并解析成字典。code == -460（风控）会退避 5 秒重试一次，
@@ -534,6 +562,14 @@ namespace PeakMusic.Core.Netease
             r.Level = MiniJson.Str(first, "level", "");
             r.Message = MiniJson.Str(first, "message");
             r.HasFreeTrial = MiniJson.Dict(first, "freeTrialInfo") != null;
+
+            // 取不到直链时附一小段原始响应（百来字，远离 BepInEx 单行 2000 字上限），排查用
+            if (string.IsNullOrEmpty(r.Url))
+            {
+                string snippet = (_lastRaw ?? "").Replace("\r", " ").Replace("\n", " ");
+                if (snippet.Length > 140) snippet = snippet.Substring(0, 140);
+                r.Message = (r.Message ?? "") + " |resp=" + snippet;
+            }
             return r;
         }
 

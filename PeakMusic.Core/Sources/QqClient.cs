@@ -94,6 +94,11 @@ namespace PeakMusic.Core.Sources
 
         // r35：整套 handler+client 可重建——绝不在请求发出后给共享实例改属性（见 NewSession 注释）
         private HttpClient _http;
+
+        // r44：取流等敏感请求专用——不带 CookieContainer，Cookie 头每次手动拼。
+        // Unity 的 Mono 在游戏里会把容器 cookie 发坏/漏发：表现为所有歌（含免费歌）
+        // 空 purl，而游戏外同代码同 cookie 全通。手动 Cookie 头与 PostFormRedirectAsync 同款姿势。
+        private HttpClient _cookielessHttp;
         private HttpClientHandler _handler;
         private CookieContainer _cookies = new CookieContainer();
         private readonly Throttle _throttle;
@@ -109,6 +114,14 @@ namespace PeakMusic.Core.Sources
         {
             NewSession();
             _throttle = throttle ?? new Throttle();
+
+            _cookielessHttp = new HttpClient(new HttpClientHandler
+            {
+                AutomaticDecompression = DecompressionMethods.GZip | DecompressionMethods.Deflate,
+                UseCookies = false,
+            }) { Timeout = TimeSpan.FromSeconds(20) };
+            _cookielessHttp.DefaultRequestHeaders.TryAddWithoutValidation("User-Agent", UserAgent);
+            _cookielessHttp.DefaultRequestHeaders.TryAddWithoutValidation("Referer", Referer);
 
             // 灌回磁盘登录态
             _savedCookie = QqCookieStore.Load();
@@ -755,8 +768,12 @@ namespace PeakMusic.Core.Sources
 
                 // comm 用 ct:23（开放平台客户端），param 带版本号——实测这组即可拿到码
                 string body =
+                    // param.ct/cv 必须是安卓客户端档案(11/20090008)：服务端按它判「码属于哪个 App」，
+                    // 用网页档案(24/4747474)创建的码会被 App 扫码侧 GetQRCodeStatus 拒绝
+                    // （104610 "can NOT scan the qrCode with this APP, not in cts-white-list"），
+                    // 手机端授权页取不到数据只显白屏、MQTT 也永远等不到 scanned 事件。
                     "{\"req_0\":{\"module\":\"music.login.LoginServer\",\"method\":\"CreateQRCode\"," +
-                    "\"param\":{\"tmeAppID\":\"qqmusic\",\"ct\":24,\"cv\":4747474}}," +
+                    "\"param\":{\"tmeAppID\":\"qqmusic\",\"ct\":11,\"cv\":20090008}}," +
                     "\"comm\":{\"ct\":23,\"cv\":0,\"tmeAppID\":\"qqmusic\"}}";
 
                 string text = await PostJsonAsync(FcgUrl, body, ct).ConfigureAwait(false);
@@ -1027,7 +1044,8 @@ namespace PeakMusic.Core.Sources
                     "\"filename\":[\"" + prefix + mid + ".mp3\"]," +
                     "\"uin\":\"" + uin + "\",\"loginflag\":1,\"platform\":\"20\"}}}";
 
-                string text = await PostJsonAsync(FcgUrl, body, ct).ConfigureAwait(false);
+                // r44：手动带 Cookie 头（见 _cookielessHttp 注释），别再走 Mono 的容器
+                string text = await PostJsonWithCookieAsync(FcgUrl, body, CookieText, ct).ConfigureAwait(false);
 
                 var root = MiniJson.AsObject(MiniJson.Parse(text));
                 var res = root != null ? MiniJson.Dict(root, "req_0") : null;
@@ -1056,13 +1074,16 @@ namespace PeakMusic.Core.Sources
 
                 if (string.IsNullOrEmpty(purl))
                 {
-                    // purl 为空 = 付费/会员/无版权。和网易的 -110 语义一致，面板按同一条提示处理
+                    // purl 为空 = 付费/会员/无版权。和网易的 -110 语义一致，面板按同一条提示处理。
+                    // |resp= 附上原始响应片段（百来字，远离 BepInEx 单行 2000 字上限），排查取流被拒用。
+                    string snippet = (text ?? "").Replace("\r", " ").Replace("\n", " ");
+                    if (snippet.Length > 140) snippet = snippet.Substring(0, 140);
                     return new SongUrlResult
                     {
                         Id = song != null ? song.Id : 0,
                         Code = -110,
                         Fee = song != null ? song.Fee : 1,
-                        Message = "QQ 音乐未返回直链（会员曲 / 付费曲 / 无版权）",
+                        Message = "QQ 音乐未返回直链（会员曲 / 付费曲 / 无版权）|resp=" + snippet,
                     };
                 }
 
@@ -1221,6 +1242,26 @@ namespace PeakMusic.Core.Sources
             {
                 req.Headers.TryAddWithoutValidation("Referer", "https://y.qq.com/");
                 using (var resp = await _http.SendAsync(req, ct).ConfigureAwait(false))
+                {
+                    resp.EnsureSuccessStatusCode();
+                    return await resp.Content.ReadAsStringAsync().ConfigureAwait(false);
+                }
+            }
+        }
+
+        /// <summary>
+        /// 带手动 Cookie 头的 JSON POST（r44）。取流等敏感请求专用——绕开 Mono 的
+        /// CookieContainer（游戏里会把登录 cookie 发坏/漏发），Cookie 头由调用方拼好。
+        /// </summary>
+        private async Task<string> PostJsonWithCookieAsync(string url, string body, string cookieHeader, CancellationToken ct)
+        {
+            using (var content = new StringContent(body, Encoding.UTF8, "application/json"))
+            using (var req = new HttpRequestMessage(HttpMethod.Post, url) { Content = content })
+            {
+                req.Headers.TryAddWithoutValidation("Referer", "https://y.qq.com/");
+                if (!string.IsNullOrEmpty(cookieHeader))
+                    req.Headers.TryAddWithoutValidation("Cookie", cookieHeader);
+                using (var resp = await _cookielessHttp.SendAsync(req, ct).ConfigureAwait(false))
                 {
                     resp.EnsureSuccessStatusCode();
                     return await resp.Content.ReadAsStringAsync().ConfigureAwait(false);

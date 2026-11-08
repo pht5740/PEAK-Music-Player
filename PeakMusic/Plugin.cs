@@ -272,7 +272,7 @@ namespace PeakMusic
         // BepInEx 5 控制台编码（UnityInjector.ConsoleEncoding.ReadByteBuffer 越界），
         // 且会毒化后续所有插件的日志 → PRZ 加载失败 → Fatal 进不了游戏。
         // 历史根因记录放 CHANGELOG.md / 记忆文件，别再堆回这里。
-        internal const string BuildStamp = "2026-11-08 r43 / v1.0.1（QQ音乐App扫码）";
+        internal const string BuildStamp = "2026-11-09 r44 / v1.0.1（取流修复：Cookie 头手动带）";
 
         internal static string SideName(int side)
         {
