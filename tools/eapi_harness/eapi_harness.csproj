@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net472</TargetFramework>
+    <LangVersion>7.3</LangVersion>
+    <AssemblyName>eapi_harness</AssemblyName>
+    <RootNamespace>EapiHarness</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <Reference Include="PeakMusic.Core">
+      <HintPath>..\..\PeakMusic.Core\bin\Release\net472\PeakMusic.Core.dll</HintPath>
+    </Reference>
+    <Reference Include="System.Net.Http" />
+  </ItemGroup>
+</Project>

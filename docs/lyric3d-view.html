@@ -1,0 +1,712 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>3D 歌词 · 透视对拍</title>
+<style>
+  :root{
+    --bg:#0b0d11; --fg:#e8ecf3; --dim:#7d8797; --line:#222834;
+    --acc:#e94747;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%;background:var(--bg);color:var(--fg);
+    font:13px/1.6 "Microsoft YaHei UI","Microsoft YaHei",system-ui,sans-serif;overflow:hidden}
+  #stage{position:fixed;inset:0;display:block;cursor:grab}
+  #stage.drag{cursor:grabbing}
+
+  .hud{position:fixed;left:18px;top:16px;padding:14px 16px;width:306px;max-height:calc(100vh - 32px);
+    overflow:auto;
+    background:rgba(16,19,25,.82);border:1px solid var(--line);border-radius:14px;
+    backdrop-filter:blur(10px);box-shadow:0 18px 40px rgba(0,0,0,.45)}
+  .hud h1{margin:0 0 2px;font-size:13px;letter-spacing:.4px}
+  .hud p.sub{margin:0 0 12px;font-size:11px;color:var(--dim)}
+  .row{display:flex;align-items:center;gap:8px;margin:9px 0}
+  .row label{flex:0 0 62px;font-size:11px;color:var(--dim)}
+  .row input[type=range]{flex:1;accent-color:var(--acc);height:16px}
+  .row span.val{flex:0 0 42px;text-align:right;font-variant-numeric:tabular-nums;font-size:11px}
+  .seg{display:flex;gap:6px;margin-top:12px}
+  .seg button{flex:1;padding:6px 0;border-radius:9px;border:1px solid var(--line);
+    background:#141821;color:var(--dim);font-size:11px;cursor:pointer}
+  .seg button.on{background:rgba(233,71,71,.16);border-color:rgba(233,71,71,.6);color:#ffd9d9}
+  .chk{display:flex;align-items:center;gap:7px;margin-top:12px;font-size:11px;color:var(--dim);cursor:pointer}
+  .chk input{accent-color:var(--acc)}
+  .hr{height:1px;background:var(--line);margin:12px 0 4px}
+  .row input.col{flex:0 0 30px;height:20px;padding:0;border:1px solid var(--line);
+    border-radius:5px;background:#0f131a;cursor:pointer}
+  .row input.col::-webkit-color-swatch-wrapper{padding:2px}
+  .row input.col::-webkit-color-swatch{border:none;border-radius:3px}
+  .row span.hex{flex:0 0 52px;letter-spacing:.4px}
+  .sw{display:flex;flex-wrap:wrap;gap:5px;margin-top:10px}
+  .sw i{width:18px;height:18px;border-radius:50%;cursor:pointer;
+    border:1px solid rgba(255,255,255,.18)}
+  .sw i.on{box-shadow:0 0 0 2px rgba(255,255,255,.55)}
+  .cfg{margin-top:10px;padding:8px 9px;border-radius:8px;background:#0f131a;
+    border:1px solid var(--line);font:10px/1.5 Consolas,monospace;color:#93a1b5;
+    white-space:pre;user-select:text;cursor:text}
+  .tip{position:fixed;left:18px;bottom:14px;font-size:11px;color:#5d6675}
+  .badge{position:fixed;right:18px;top:16px;padding:7px 12px;border-radius:999px;
+    border:1px solid var(--line);background:rgba(16,19,25,.82);font-size:11px;color:var(--dim)}
+  .badge b{color:#8fe3b0;font-weight:600}
+  .dbg{position:fixed;right:18px;bottom:14px;font-size:11px;color:#6b7686;
+    font-variant-numeric:tabular-nums;white-space:pre;text-align:right}
+</style>
+</head>
+<body>
+<canvas id="stage"></canvas>
+
+<div class="hud">
+  <h1>世界空间 3D 歌词 · 透视对拍</h1>
+  <p class="sub">拖动画布转头：字的透视会跟着变，这才是 3D。</p>
+
+  <div class="row"><label>散开角</label><input id="sSpread" type="range" min="0" max="60" step="1" value="30"><span class="val" id="vSpread">30°</span></div>
+  <div class="row"><label>距离</label><input id="sDist" type="range" min="4" max="24" step="0.5" value="10.5"><span class="val" id="vDist">10.5</span></div>
+  <div class="row"><label>字号</label><input id="sSize" type="range" min="18" max="110" step="2" value="64"><span class="val" id="vSize">64</span></div>
+  <div class="row"><label>平面偏转</label><input id="sTilt" type="range" min="0" max="28" step="1" value="11"><span class="val" id="vTilt">11°</span></div>
+
+  <div class="hr"></div>
+  <div class="row"><label>已唱色</label><input class="col" id="cLit" type="color" value="#ffffff"><span class="val hex" id="vLit">FFFFFF</span></div>
+  <div class="row"><label>未唱色</label><input class="col" id="cRest" type="color" value="#ffffff"><input id="sDim" type="range" min="10" max="100" step="1" value="44"><span class="val" id="vDim">44%</span></div>
+  <div class="row"><label>翻译色</label><input class="col" id="cSub" type="color" value="#ffffff"><span class="val hex" id="vSub">FFFFFF</span></div>
+  <div class="sw" id="sw"></div>
+  <div class="cfg" id="cfg"></div>
+
+  <div class="seg">
+    <button id="m0" class="on">两侧交替</button>
+    <button id="m1">只左</button>
+    <button id="m2">只右</button>
+  </div>
+
+  <label class="chk"><input id="split" type="checkbox" checked> 按词切块（Not / to / me 那种）</label>
+  <label class="chk"><input id="glow" type="checkbox" checked> 字发光</label>
+  <label class="chk"><input id="old" type="checkbox"> 切回旧的「屏幕投影」版本</label>
+</div>
+
+<div class="badge" id="badge">renderer: <b>世界网格（真透视）</b></div>
+<div class="tip">空格 暂停 / 继续　·　R 重播　·　拖动画布转头</div>
+
+<script>
+(() => {
+  window.addEventListener('error', e => {
+    const d = document.getElementById('dbg');
+    if (d) d.textContent = 'ERR: ' + e.message;
+  });
+  const cv = document.getElementById('stage');
+  const ctx = cv.getContext('2d');
+  let W = 0, H = 0, DPR = 1;
+
+  function resize(){
+    DPR = Math.min(2, window.devicePixelRatio || 1);
+    W = window.innerWidth; H = window.innerHeight;
+    cv.width = W * DPR; cv.height = H * DPR;
+    cv.style.width = W + 'px'; cv.style.height = H + 'px';
+    ctx.setTransform(DPR,0,0,DPR,0,0);
+  }
+  window.addEventListener('resize', resize); resize();
+
+  // ── 参数（与插件里的常量对齐）──
+  const P = { spread:30, dist:10.5, size:64, tilt:11, mode:0, old:false,
+              split:true, glow:true, glowStrength:0.6,
+              lit:'#ffffff', rest:'#ffffff', sub:'#ffffff', dim:0.44,
+              litCss:'#fff', restCss:'rgba(255,255,255,.44)' };
+
+  // 和 C# 里 LyricColors.Presets 一一对应，改一边记得改另一边
+  const PRESETS = [
+    ['纯白',   'FFFFFF', 'FFFFFF', 'FFFFFF'],
+    ['暖米',   'FFF6E3', 'FFF6E3', 'E6D9C2'],
+    ['霓虹青', '6FF7E4', '6FF7E4', 'BCEDE6'],
+    ['樱花粉', 'FFB3D1', 'FFB3D1', 'F2DAE4'],
+    ['烈焰红', 'FF6B6B', 'FF6B6B', 'FFC9C9'],
+    ['薄荷绿', 'A6F07A', 'A6F07A', 'DCF3CB'],
+    ['落日橙', 'FFC078', 'FFC078', 'FFE5C4'],
+    ['冰川蓝', 'A3CBFF', 'A3CBFF', 'DAEAFF'],
+    ['暗夜紫', 'C9A6FF', 'C9A6FF', 'E5D8FF'],
+  ];
+  const FOV = 60;                     // 竖直 FOV（PEAK 大致在这个量级）
+  const PITCH_DROP = 4, PITCH_RAND = 6;
+  const ENTER = 0.42, FADE = 0.9, LIFT = 2.6;
+  const EM_TO_CAP = 1.42;
+
+  // ── 假歌词：每 3.4s 一句（第二列是翻译副行，用来预览「翻译色」）──
+  const LINES = [
+    ['雨爱的秘密 能一直延续', 'The secret of the rain will carry on'],
+    ['我相信我将会 看到彩虹的美丽', 'I believe I will see the beauty of a rainbow'],
+    ['就连呼吸 都带着你的气息', 'Even my breath still carries you'],
+    ['下雨天 你说我们回不到从前', 'You said we can never go back'],
+    ['爱像雨点 落在心里看不见', 'Love falls like rain, unseen'],
+    ['如果时间 可以倒退一点点', 'If time could turn back a little'],
+    ['我们会不会 还站在这里', 'Would we still be standing here'],
+    ['等一场 不会停的雨', 'Waiting for a rain that never ends'],
+  ].map((r,i) => ({ text:r[0], trans:r[1], t: i * 3.4 }));
+
+  // ── 相机（第一人称，按住拖 = 转头）──
+  const cam = { yaw:0, pitch:0 };
+  let dragging = false, lastX = 0, lastY = 0;
+  cv.addEventListener('pointerdown', e => { dragging = true; lastX = e.clientX; lastY = e.clientY; cv.classList.add('drag'); });
+  window.addEventListener('pointerup', () => { dragging = false; cv.classList.remove('drag'); });
+  window.addEventListener('pointermove', e => {
+    if(!dragging) return;
+    cam.yaw   -= (e.clientX - lastX) * 0.0032;
+    cam.pitch += (e.clientY - lastY) * 0.0032;
+    cam.pitch = Math.max(-0.9, Math.min(0.9, cam.pitch));
+    lastX = e.clientX; lastY = e.clientY;
+  });
+
+  // 相机基向量（世界 +Y 向上，+Z 为默认朝向）
+  function basis(){
+    const cy = Math.cos(cam.yaw), sy = Math.sin(cam.yaw);
+    const cp = Math.cos(cam.pitch), sp = Math.sin(cam.pitch);
+    // forward
+    const F = { x: sy*cp, y: -sp, z: cy*cp };
+    // right = normalize(cross(up, F))，up=(0,1,0)
+    const R = { x: cp >= 0 ? cy : cy, y: 0, z: -sy };
+    const rl = Math.hypot(R.x, R.z) || 1; R.x/=rl; R.z/=rl;
+    // up = cross(F, R)
+    const U = { x: F.y*R.z - F.z*R.y, y: F.z*R.x - F.x*R.z, z: F.x*R.y - F.y*R.x };
+    return { F, R, U };
+  }
+
+  const focal = () => (H * 0.5) / Math.tan(FOV * Math.PI / 360);
+  function project(p){
+    const b = basis();
+    // 世界点 → 相机空间
+    const x = p.x*b.R.x + p.y*b.R.y + p.z*b.R.z;
+    const y = p.x*b.U.x + p.y*b.U.y + p.z*b.U.z;
+    const z = p.x*b.F.x + p.y*b.F.y + p.z*b.F.z;
+    if (z < 0.2) return null;
+    const f = focal();
+    return { x: W*0.5 + f*x/z, y: H*0.5 - f*y/z, z };
+  }
+
+  // ── 气泡（每句一块世界空间四边形）──
+  let bubbles = [], clock = 0, lastIdx = -1, paused = false, lastSide = -1;
+  let startT = performance.now() / 1000;
+
+  // ?t=5.2 直接从第 5.2 秒开始（截图 / 对拍用），&dbg=1 打印落点数值
+  let DBG = false;
+  {
+    const qp = new URLSearchParams(location.search);
+    if (qp.has('t')) clock = Math.max(0, parseFloat(qp.get('t')) || 0);
+    DBG = qp.has('dbg');
+    // ?lit=FF6B6B&rest=8FA6C4&sub=FFC9C9&dim=0.3 —— 方便直接把 cfg 里的颜色贴进地址栏对拍
+    if (qp.has('lit')) P.lit = '#' + qp.get('lit').replace('#','');
+    if (qp.has('rest')) P.rest = '#' + qp.get('rest').replace('#','');
+    if (qp.has('sub')) P.sub = '#' + qp.get('sub').replace('#','');
+    if (qp.has('dim')) P.dim = Math.max(0.05, Math.min(1, parseFloat(qp.get('dim')) || 0.44));
+  }
+
+  // 按空格 / 句读切块（和插件里的 SplitChunks 一致）：中文没空格就整句一块
+  const PUNCT = '，。、！？；：,.!?;:';
+  function splitChunks(text){
+    if (P.split === false) return [text.trim()];
+    const out = []; let cur = '';
+    for (const ch of text){
+      if (/\s/.test(ch)){ if (cur){ out.push(cur); cur = ''; } continue; }
+      cur += ch;
+      if (PUNCT.includes(ch) || cur.length >= 14){ out.push(cur); cur = ''; }
+    }
+    if (cur) out.push(cur);
+    while (out.length > 8){ out[out.length-2] += out[out.length-1]; out.pop(); }
+    return out.length ? out : [text];
+  }
+
+  function spawn(idx){
+    const line = LINES[idx];
+    const chunks = splitChunks(line.text);
+    const total = chunks.reduce((a,s) => a + s.length, 0) || 1;
+    const single = chunks.length === 1;
+    const DUR = 3.4;
+    let cursor = 0;
+
+    chunks.forEach((w, i) => {
+      let sign;
+      if (P.mode === 1) sign = -1;
+      else if (P.mode === 2) sign = 1;
+      else if (single) sign = lastSide > 0 ? -1 : 1;
+      else sign = (i % 2 === 0) ? -1 : 1;
+      if (single) lastSide = sign;
+
+      const b = {
+        idx, text: w, single,
+        t0: line.t + DUR * cursor / total,
+        t1: line.t + DUR * (cursor + w.length) / total,
+        trans: (i === 0 && single) ? line.trans : null,
+        yaw: (sign * P.spread * (single ? (0.62 + Math.random()*0.38)
+                                       : (0.15 + Math.random()*0.40))) * Math.PI/180,
+        pitch: (PITCH_DROP + Math.random()*PITCH_RAND - 8) * Math.PI/180,
+        dist: P.dist + (Math.random()*5 - 2.4),
+        emScale: single ? 1 : (0.82 + Math.random()*0.36),
+        tiltY: -sign * P.tilt * Math.PI/180 * (single ? 1 : (0.5 + Math.random()*0.6)),
+        tiltP: (Math.random()*2-1) * 4 * Math.PI/180,
+        tiltR: (Math.random()*2-1) * 3 * Math.PI/180,
+        phase: Math.random()*6.283, retired:false, retireAt:0,
+      };
+      cursor += w.length;
+
+      bubbles.push(b);
+      if (bubbles.filter(x => !x.retired).length > 1){
+        bubbles.forEach(x => { if(!x.retired){ x.retired = true; x.retireAt = clock; } });
+      }
+      if (bubbles.length > 10) bubbles.splice(0, bubbles.length - 10);
+      return b;
+    });
+  }
+
+  // ── 把一行字渲染成离屏贴图（卡拉 OK：暗底 + 已唱亮）──
+  const texCache = new Map();
+  function lineTexture(text, litChars){
+    const bucket = Math.round(litChars / Math.max(1, Math.ceil(text.length/12)));  // 分档，省重绘
+    const key = text + '#' + bucket + '|' + P.litCss + '|' + P.restCss;
+    let c = texCache.get(key);
+    if (c) return c;
+
+    const FS = 100, Hh = 140;
+    const probe = document.createElement('canvas').getContext('2d');
+    probe.font = `700 ${FS}px "Microsoft YaHei UI","Microsoft YaHei",sans-serif`;
+    const wpx = Math.max(8, Math.ceil(probe.measureText(text).width)) + 8;
+
+    c = document.createElement('canvas');
+    c.width = wpx; c.height = Hh;
+    const g = c.getContext('2d');
+    g.font = `700 ${FS}px "Microsoft YaHei UI","Microsoft YaHei",sans-serif`;
+    g.textBaseline = 'middle';
+    g.fillStyle = P.restCss;
+    g.fillText(text, 4, Hh*0.5);
+
+    const k = Math.round(bucket * Math.max(1, Math.ceil(text.length/12)));
+    if (k > 0){
+      const lit = text.slice(0, Math.min(text.length, k));
+      g.save();
+      g.beginPath();
+      g.rect(0, 0, Math.ceil(g.measureText(lit).width) + 6, Hh);
+      g.clip();
+      g.fillStyle = P.litCss;
+      g.fillText(text, 4, Hh*0.5);
+      g.restore();
+    }
+    c._wpx = wpx;
+    texCache.set(key, c);
+    if (texCache.size > 40) texCache.clear();
+    return c;
+  }
+
+  // 翻译副行：单独的贴图，颜色走 P.sub
+  function subTexture(text){
+    const key = 'sub|' + text + '|' + P.sub + '|' + P.dim;
+    let c = texCache.get(key);
+    if (c) return c;
+
+    const FS = 100, Hh = 140;
+    const probe = document.createElement('canvas').getContext('2d');
+    probe.font = `600 ${FS}px "Microsoft YaHei UI","Microsoft YaHei",sans-serif`;
+    const wpx = Math.max(8, Math.ceil(probe.measureText(text).width)) + 8;
+
+    c = document.createElement('canvas');
+    c.width = wpx; c.height = Hh;
+    const g = c.getContext('2d');
+    g.font = `600 ${FS}px "Microsoft YaHei UI","Microsoft YaHei",sans-serif`;
+    g.textBaseline = 'middle';
+    g.fillStyle = hexToRgba(P.sub, 0.75);
+    g.fillText(text, 4, Hh*0.5);
+    c._wpx = wpx;
+    texCache.set(key, c);
+    return c;
+  }
+
+  // 透视绘制：把贴图按 N 段梯形贴到一个四点上
+  function drawQuad(img, p0, p1, p2, p3, alpha){
+    const N = 26;
+    const sx = img._wpx || img.width, sy = img.height;
+    ctx.globalAlpha = alpha;
+    for (let i = 0; i < N; i++){
+      const u0 = i/N, u1 = (i+1)/N;
+      // 上边 / 下边插值
+      const t0 = lerp(p0,p1,u0), t1 = lerp(p0,p1,u1);
+      const b0 = lerp(p3,p2,u0), b1 = lerp(p3,p2,u1);
+      const sw = sx * (u1-u0), sh = sy;
+
+      ctx.save();
+      ctx.beginPath();
+      ctx.moveTo(t0.x,t0.y); ctx.lineTo(t1.x,t1.y);
+      ctx.lineTo(b1.x,b1.y); ctx.lineTo(b0.x,b0.y);
+      ctx.closePath(); ctx.clip();
+
+      const a = (t1.x-t0.x)/sw, b = (t1.y-t0.y)/sw;
+      const c = (b0.x-t0.x)/sh, d = (b0.y-t0.y)/sh;
+      ctx.setTransform(a*DPR, b*DPR, c*DPR, d*DPR, t0.x*DPR, t0.y*DPR);
+      ctx.drawImage(img, sx*u0, 0, sw, sh, 0, 0, sw, sh);
+      ctx.restore();
+    }
+    ctx.globalAlpha = 1;
+  }
+  const lerp = (a,b,t) => ({ x:a.x + (b.x-a.x)*t, y:a.y + (b.y-a.y)*t });
+
+  // 一块文字四边形：锚点在左中，宽 w 高 h
+  function quadCorners(pos, w, h, tiltY, tiltP, tiltR){
+    const b = basis();
+    let Rq = { ...b.R }, Uq = { ...b.U }, Nq = { x:-b.F.x, y:-b.F.y, z:-b.F.z };
+    // 偏航：R 与 N 之间转
+    let ca = Math.cos(tiltY), sa = Math.sin(tiltY);
+    let Rx = Rq.x*ca + Nq.x*sa, Ry = Rq.y*ca + Nq.y*sa, Rz = Rq.z*ca + Nq.z*sa;
+    let Nx = -Rq.x*sa + Nq.x*ca, Ny = -Rq.y*sa + Nq.y*ca, Nz = -Rq.z*sa + Nq.z*ca;
+    // 俯仰：U 与 N 之间转
+    let cb = Math.cos(tiltP), sb = Math.sin(tiltP);
+    let Ux = Uq.x*cb + Nx*sb, Uy = Uq.y*cb + Ny*sb, Uz = Uq.z*cb + Nz*sb;
+    let N2x = -Uq.x*sb + Nx*cb, N2y = -Uq.y*sb + Ny*cb, N2z = -Uq.z*sb + Nz*cb;
+    // 滚转：R 与 U 之间转
+    const cr = Math.cos(tiltR), sr = Math.sin(tiltR);
+    const R2x = Rx*cr + Ux*sr, R2y = Ry*cr + Uy*sr, R2z = Rz*cr + Uz*sr;
+    const U2x = -Rx*sr + Ux*cr, U2y = -Ry*sr + Uy*cr, U2z = -Rz*sr + Uz*cr;
+
+    const mk = (fx, fy) => project({
+      x: pos.x + R2x*(fx*w) + U2x*(fy*h),
+      y: pos.y + R2y*(fx*w) + U2y*(fy*h),
+      z: pos.z + R2z*(fx*w) + U2z*(fy*h),
+    });
+
+    // 顺序必须是 左上 / 右上 / 右下 / 左下：屏幕 y 轴向下，世界 y 向上，
+    // 所以左上是 fy=+0.5（世界更高 = 屏幕更靠上）。这里最容易写反，反了字就上下颠倒。
+    return [ mk(0, 0.5), mk(1, 0.5), mk(1, -0.5), mk(0, -0.5) ];
+  }
+
+  // ── 辉光 / 下划线的小工具 ──
+  const lerpP = (a, b, t) => ({ x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t });
+  function scaleQuad(cs, k){
+    const cx = (cs[0].x + cs[1].x + cs[2].x + cs[3].x) / 4;
+    const cy = (cs[0].y + cs[1].y + cs[2].y + cs[3].y) / 4;
+    return cs.map(c => ({ x: cx + (c.x - cx) * k, y: cy + (c.y - cy) * k, z: c.z }));
+  }
+  function drawGlow(img, cs, alpha){
+    if (cs.some(c => !c)) return;
+    ctx.globalCompositeOperation = 'lighter';
+    drawQuad(img, cs[0], cs[1], cs[2], cs[3], alpha);
+    ctx.globalCompositeOperation = 'source-over';
+  }
+  function fillQuad(cs, css, alpha){
+    if (cs.some(c => !c)) return;
+    ctx.globalAlpha = Math.max(0, Math.min(1, alpha));
+    ctx.fillStyle = css;
+    ctx.beginPath();
+    ctx.moveTo(cs[0].x, cs[0].y); ctx.lineTo(cs[1].x, cs[1].y);
+    ctx.lineTo(cs[2].x, cs[2].y); ctx.lineTo(cs[3].x, cs[3].y);
+    ctx.closePath(); ctx.fill();
+    ctx.globalAlpha = 1;
+  }
+
+  // ── 背景：地平线 + 透视网格，用来读深度 ──
+  function drawScene(){
+    const g = ctx.createLinearGradient(0,0,0,H);
+    g.addColorStop(0, '#0e1219'); g.addColorStop(0.52, '#141922'); g.addColorStop(1, '#0a0c10');
+    ctx.fillStyle = g; ctx.fillRect(0,0,W,H);
+
+    const b = basis();
+    ctx.strokeStyle = 'rgba(90,110,140,.16)';
+    ctx.lineWidth = 1;
+    for (let i = -10; i <= 10; i++){
+      const p1 = project({ x:i*3, y:-1.6, z:0.5 });
+      const p2 = project({ x:i*3, y:-1.6, z:60 });
+      if (!p1 || !p2) continue;
+      ctx.beginPath(); ctx.moveTo(p1.x,p1.y); ctx.lineTo(p2.x,p2.y); ctx.stroke();
+    }
+    for (let z = 0; z <= 60; z += 3){
+      const a = project({ x:-30, y:-1.6, z }); const c = project({ x:30, y:-1.6, z });
+      if (!a || !c) continue;
+      ctx.beginPath(); ctx.moveTo(a.x,a.y); ctx.lineTo(c.x,c.y); ctx.stroke();
+    }
+    return b;
+  }
+
+  // 旧的「屏幕投影」版：把字画在投影点上，永远轴对齐
+  function drawOldStyle(b, alpha, chars){
+    const p = project(posOf(b));
+    if (!p) return;
+    const f = focal();
+    const sizePx = P.size * (P.dist / p.z);
+    const img = lineTexture(b.text, chars);
+    const h = sizePx * 1.4;
+    const w = h * (img._wpx / img.height);
+    ctx.globalAlpha = alpha;
+    ctx.setTransform(DPR,0,0,DPR,0,0);
+    ctx.drawImage(img, p.x, p.y - h*0.5, w, h);
+    ctx.globalAlpha = 1;
+  }
+
+  function posOf(b){
+    const bs = basis();
+    // 相机基向量绕 yaw / pitch 旋转 forward
+    const cy = Math.cos(b.yaw), sy = Math.sin(b.yaw);
+    const cp = Math.cos(b.pitch), sp = Math.sin(b.pitch);
+    // dir = F*cos(yaw)*cos(pitch) + R*sin(yaw)*cos(pitch) - U*sin(pitch)
+    const dir = {
+      x: bs.F.x*cy*cp + bs.R.x*sy*cp - bs.U.x*sp,
+      y: bs.F.y*cy*cp + bs.R.y*sy*cp - bs.U.y*sp,
+      z: bs.F.z*cy*cp + bs.R.z*sy*cp - bs.U.z*sp,
+    };
+    return { x: dir.x*b.dist, y: dir.y*b.dist, z: dir.z*b.dist };
+  }
+
+  // ── 主循环 ──
+  let lastFrame = performance.now()/1000;
+  function frame(){
+    const now = performance.now()/1000;
+    const dt = Math.min(0.05, now - lastFrame);
+    lastFrame = now;
+    if (!paused) clock += dt;
+
+    drawScene();
+
+    // 时间轴：到了就 spawn
+    let idx = -1;
+    for (let i = 0; i < LINES.length; i++) if (clock >= LINES[i].t) idx = i;
+    if (idx !== lastIdx && idx >= 0){ spawn(idx); lastIdx = idx; }
+    if (clock > LINES[LINES.length-1].t + 6){ clock = 0; lastIdx = -1; bubbles = []; }
+
+    for (const b of bubbles){
+      // 逐词弹出：这一块自己的时间还没到就不画（和插件里的 T0 一致）
+      if (clock < b.t0 && !b.retired) continue;
+
+      const age = clock - b.t0;
+      const enter = Math.min(1, Math.max(0, age / ENTER));
+      let alpha = Math.min(1, enter * 1.8);
+      let lift = 0;
+      if (b.retired){
+        const f = Math.min(1, Math.max(0, (clock - b.retireAt) / FADE));
+        alpha *= 1 - f;
+        lift = f*f*LIFT;
+        if (f >= 1) continue;
+      }
+      if (alpha <= 0.01) continue;
+
+      // 世界行高：让 10.5 格外看起来是 size 像素（块之间再随机浮动一点）
+      const pxWorld = 2 * b.dist * Math.tan(FOV*Math.PI/360) / H;
+      const em = P.size * pxWorld * EM_TO_CAP * (b.emScale || 1);
+
+      // 卡拉 OK：按这一块自己的时间窗算点亮进度
+      const prog = b.retired ? 1
+        : Math.min(1, Math.max(0, (clock - b.t0) / Math.max(0.3, b.t1 - b.t0)));
+      const litChars = Math.round(prog * b.text.length);
+
+      if (P.old){ drawOldStyle(b, alpha, litChars); continue; }
+
+      const img = lineTexture(b.text, litChars);
+      let w = em * (img._wpx / img.height);
+      let hh = em;
+      const visW = 2 * b.dist * Math.tan(FOV * Math.PI / 360) * (W / H);
+      if (w > visW * 0.86){ const k = (visW * 0.86) / w; w *= k; hh *= k; }
+
+      // 长句子 + 30° 散开会顶出屏幕：把角度收回来（和插件里的循环一致）
+      for (let k = 0; k < 10; k++){
+        const rad = Math.abs(b.yaw), z = Math.cos(rad) * b.dist;
+        const halfAtDepth = z * Math.tan(FOV * Math.PI / 360) * (W / H) * 0.84;
+        if (Math.sin(rad) * b.dist + w * 0.55 <= halfAtDepth) break;
+        b.yaw *= 0.78;
+      }
+      // 收角还放不下就缩字（和插件一致）
+      {
+        const rad = Math.abs(b.yaw), z = Math.cos(rad) * b.dist;
+        const room = z * Math.tan(FOV * Math.PI / 360) * (W / H) * 0.84 - Math.sin(rad) * b.dist;
+        if (room > 0.05 && w * 0.55 > room){ const k = room / (w * 0.55); w *= k; hh *= k; }
+      }
+
+      const pos = posOf(b);
+      pos.y += lift;
+      // 当前句抖动
+      if (!b.retired && b.idx === idx){
+        pos.x += Math.sin(now*11.3 + b.phase*3.1) * 0.0011 * b.dist;
+        pos.y += Math.cos(now*12.9 + b.phase*2.3) * 0.0009 * b.dist;
+      }
+
+      // 逐词弹出：从 0.62 弹到 1（整行模式更收敛）
+      const s = 0.62 + 0.38 * easeOutBack(enter);
+
+      // 左侧的句子以右端为锚点（往左长），否则负 yaw 的句子也会一路向右冲
+      const bs0 = basis();
+      const anchor = b.yaw < 0
+        ? { x: pos.x - bs0.R.x*w*s, y: pos.y - bs0.R.y*w*s, z: pos.z - bs0.R.z*w*s }
+        : pos;
+
+      // 四角真投影量一遍：超屏就缩字（和插件里的 FitsOnScreen 一致）
+      let corners = quadCorners(anchor, w*s, hh*s, b.tiltY, b.tiltP, b.tiltR);
+      for (let it = 0; it < 6; it++){
+        if (corners.some(c => !c)) break;
+        const xs = corners.map(c => c.x);
+        if (Math.min(...xs) >= 16 && Math.max(...xs) <= W - 16) break;
+        w *= 0.88; hh *= 0.88;
+        corners = quadCorners(anchor, w*s, hh*s, b.tiltY, b.tiltP, b.tiltR);
+      }
+      if (corners.some(c => !c)) continue;
+
+      // 辉光：两层放大的同款贴图，用 lighter 叠在字后面
+      if (P.glow !== false){
+        const gs = (P.glowStrength === undefined ? 0.6 : P.glowStrength);
+        drawGlow(img, scaleQuad(corners, 1.18), alpha * gs * 0.17);
+        drawGlow(img, scaleQuad(corners, 1.07), alpha * gs * 0.34);
+      }
+
+      drawQuad(img, corners[0], corners[1], corners[2], corners[3], alpha);
+
+      // 词下面那条小横线：取屏幕坐标里 y 更大的那一边（下面），再往下挪一点点
+      {
+        const mid = (a, b) => ({ x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 });
+        const isDown = (p, q) => p.y > q.y;
+        const bl = isDown(corners[3], corners[0]) ? corners[3] : corners[0];
+        const br = isDown(corners[2], corners[1]) ? corners[2] : corners[1];
+        const tl = isDown(corners[3], corners[0]) ? corners[0] : corners[3];
+        const tr = isDown(corners[2], corners[1]) ? corners[1] : corners[2];
+
+        const topMid = mid(tl, tr), botMid = mid(bl, br);
+        const hpx = Math.hypot(botMid.x - topMid.x, botMid.y - topMid.y) || 1;
+        const dir = { x: (botMid.x - topMid.x) / hpx, y: (botMid.y - topMid.y) / hpx };
+
+        const off = hpx * 0.12;                      // 离字底再往下 12% 行高
+        const th = Math.max(1.2, hpx * 0.045);       // 线粗
+        const push = (p, k) => ({ x: p.x + dir.x * k, y: p.y + dir.y * k });
+
+        const l1 = push(bl, off), r1 = push(br, off);
+        const l2 = push(bl, off + th), r2 = push(br, off + th);
+        const i1 = lerpP(l1, r1, 0.18), i2 = lerpP(l1, r1, 0.82);
+        const i3 = lerpP(l2, r2, 0.82), i4 = lerpP(l2, r2, 0.18);
+        fillQuad([i1, i2, i3, i4], P.litCss, alpha * 0.75);
+      }
+
+      // 翻译副行：只画当前句，居中贴在本行下方
+      if (!b.retired && b.idx === idx && b.trans){
+        const timg = subTexture(b.trans);
+        let th = hh * 0.46, tw = th * (timg._wpx / timg.height);
+        const lim = w * s * 0.98;                 // 翻译别比原文还宽
+        if (tw > lim){ const k = lim / tw; tw *= k; th *= k; }
+        const dx = (w*s - tw) * 0.5, dy = hh * 0.62 * s;
+        const tpos = {
+          x: anchor.x + bs0.R.x*dx - bs0.U.x*dy,
+          y: anchor.y + bs0.R.y*dx - bs0.U.y*dy,
+          z: anchor.z + bs0.R.z*dx - bs0.U.z*dy,
+        };
+        const tc = quadCorners(tpos, tw, th, b.tiltY, b.tiltP, b.tiltR);
+        if (!tc.some(c => !c)) drawQuad(timg, tc[0], tc[1], tc[2], tc[3], alpha*0.85);
+      }
+
+      if (DBG && !b.retired){
+        const xs = corners.map(c => c.x);
+        document.getElementById('badge').textContent =
+          `yaw ${(b.yaw*180/Math.PI).toFixed(1)}° d ${b.dist.toFixed(1)} w ${w.toFixed(2)} ` +
+          `x ${Math.min(...xs).toFixed(0)}..${Math.max(...xs).toFixed(0)} W=${W}`;
+      }
+    }
+
+    requestAnimationFrame(frame);
+  }
+
+  const easeOutBack = t => { const c1=1.28, c3=c1+1, u=t-1; return 1 + c3*u*u*u + c1*u*u; };
+
+  // ── 控件 ──
+  const bind = (id, vid, key, suffix) => {
+    const el = document.getElementById(id), out = document.getElementById(vid);
+    el.addEventListener('input', () => {
+      P[key] = parseFloat(el.value);
+      out.textContent = el.value + suffix;
+    });
+  };
+  bind('sSpread','vSpread','spread','°');
+  bind('sDist','vDist','dist','');
+  bind('sSize','vSize','size','');
+  bind('sTilt','vTilt','tilt','°');
+
+  // ── 颜色 ──
+  const hexOf = css => css.replace('#','').toUpperCase();
+  function applyColors(){
+    P.litCss = P.lit;
+    P.restCss = hexToRgba(P.rest, P.dim);
+    texCache.clear();                  // 颜色变了，贴图得重烘
+    document.getElementById('cLit').value = P.lit;
+    document.getElementById('cRest').value = P.rest;
+    document.getElementById('cSub').value = P.sub;
+    document.getElementById('sDim').value = Math.round(P.dim*100);
+    document.getElementById('vLit').textContent = hexOf(P.lit);
+    document.getElementById('vSub').textContent = hexOf(P.sub);
+    document.getElementById('vDim').textContent = Math.round(P.dim*100) + '%';
+    document.getElementById('cfg').textContent =
+      '[歌词]\n' +
+      'ColorLit  = ' + hexOf(P.lit) + '\n' +
+      'ColorRest = ' + hexOf(P.rest) + '\n' +
+      'ColorSub  = ' + hexOf(P.sub) + '\n' +
+      'RestDim   = ' + P.dim.toFixed(2);
+
+    // 高亮当前命中的预设
+    const lit = hexOf(P.lit), rest = hexOf(P.rest), sub = hexOf(P.sub);
+    [...document.querySelectorAll('.sw i')].forEach((el,i) => {
+      const p = PRESETS[i];
+      el.classList.toggle('on', p[1]===lit && p[2]===rest && p[3]===sub);
+    });
+  }
+
+  function hexToRgba(hex, a){
+    const h = hex.replace('#','');
+    const r = parseInt(h.slice(0,2),16), g = parseInt(h.slice(2,4),16), b = parseInt(h.slice(4,6),16);
+    return `rgba(${r},${g},${b},${a})`;
+  }
+
+  function bindColor(id, key){
+    const el = document.getElementById(id);
+    el.addEventListener('input', () => { P[key] = el.value; applyColors(); });
+  }
+  bindColor('cLit','lit');
+  bindColor('cRest','rest');
+  bindColor('cSub','sub');
+
+  const dimEl = document.getElementById('sDim');
+  dimEl.addEventListener('input', () => { P.dim = parseFloat(dimEl.value)/100; applyColors(); });
+
+  // 预设色板
+  const swBox = document.getElementById('sw');
+  PRESETS.forEach((p, i) => {
+    const el = document.createElement('i');
+    el.style.background = '#' + p[1];
+    el.title = p[0] + ' · ' + p[1];
+    el.addEventListener('click', () => {
+      P.lit = '#' + p[1].toLowerCase();
+      P.rest = '#' + p[2].toLowerCase();
+      P.sub = '#' + p[3].toLowerCase();
+      document.getElementById('cLit').value = P.lit;
+      document.getElementById('cRest').value = P.rest;
+      document.getElementById('cSub').value = P.sub;
+      applyColors();
+    });
+    swBox.appendChild(el);
+  });
+
+  applyColors();
+
+  ['m0','m1','m2'].forEach((id,i) => {
+    document.getElementById(id).addEventListener('click', () => {
+      P.mode = i;
+      ['m0','m1','m2'].forEach(x => document.getElementById(x).classList.remove('on'));
+      document.getElementById(id).classList.add('on');
+    });
+  });
+
+  document.getElementById('split').addEventListener('change', e => {
+    P.split = e.target.checked;
+    bubbles = []; lastIdx = -1;              // 重新切块，当前这行重来一遍
+  });
+
+  document.getElementById('glow').addEventListener('change', e => {
+    P.glow = e.target.checked;
+  });
+
+  document.getElementById('old').addEventListener('change', e => {
+    P.old = e.target.checked;
+    document.getElementById('badge').innerHTML = P.old
+      ? 'renderer: <b style="color:#f0b46a">屏幕投影（2D）</b>'
+      : 'renderer: <b>世界网格（真透视）</b>';
+  });
+
+  window.addEventListener('keydown', e => {
+    if (e.code === 'Space'){ paused = !paused; e.preventDefault(); }
+    if (e.key === 'r' || e.key === 'R'){ clock = 0; lastIdx = -1; bubbles = []; }
+  });
+
+  frame();
+})();
+</script>
+</body>
+</html>

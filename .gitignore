@@ -1,0 +1,19 @@
+# 构建产物
+bin/
+obj/
+*.user
+.vs/
+_sandbox-out/
+samples/*.raw
+
+# 本机临时排查文件（日志、探针输出、二维码截图）
+_*.txt
+_*.log
+*.log
+login-qr*.png
+app-qr.png
+
+# 测试素材（本机服务用，体积大，不入库）
+testmedia/test-song.mp3
+tools/qr_test.png
+tools/qr_tests/

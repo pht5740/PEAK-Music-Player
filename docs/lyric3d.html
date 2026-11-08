@@ -1,0 +1,291 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>PeakMusic · 3D 两侧漂浮歌词预览</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: #14161a; color: #e8e8ee;
+    font-family: "Microsoft YaHei UI", "Microsoft YaHei", system-ui, sans-serif;
+    display: flex; flex-direction: column; height: 100vh; overflow: hidden;
+  }
+  canvas { flex: 1; display: block; width: 100%; height: 100%; }
+
+  .bar {
+    display: flex; align-items: center; gap: 18px; flex-wrap: wrap;
+    padding: 10px 16px; background: #1b1e24; border-top: 1px solid #2b2f38;
+    font-size: 12px; color: #a8adb8;
+  }
+  .bar b { color: #e8e8ee; font-weight: 500; }
+  .group { display: flex; align-items: center; gap: 8px; }
+  input[type=range] { width: 104px; accent-color: #e94747; }
+  button {
+    background: #2a2e37; color: #dfe3ea; border: 1px solid #3a3f4a;
+    border-radius: 6px; padding: 5px 11px; font-size: 12px; cursor: pointer;
+    font-family: inherit;
+  }
+  button.on { background: #e94747; border-color: #e94747; color: #fff; }
+  .hint { margin-left: auto; color: #6d7280; }
+
+  .title {
+    position: absolute; left: 16px; top: 14px; font-size: 12px; color: #8f95a3;
+    line-height: 1.7; pointer-events: none;
+  }
+  .title b { color: #e8e8ee; font-weight: 500; }
+  .stage { position: relative; flex: 1; min-height: 0; }
+</style>
+</head>
+<body>
+
+<div class="stage">
+  <canvas id="c"></canvas>
+  <div class="title">
+    <b>PeakMusic · 3D 两侧漂浮歌词</b><br>
+    每句 spawn 到视线左右 ±散开角、略低于视线，距离随机 → 近大远小<br>
+    当前句逐字点亮并轻微抖动，唱完 0.85 秒内上飘淡出
+  </div>
+</div>
+
+<div class="bar">
+  <div class="group">
+    <b>散开</b>
+    <button id="m0" class="on">两侧交替</button>
+    <button id="m1">只左</button>
+    <button id="m2">只右</button>
+  </div>
+  <div class="group"><b>角度</b><input id="spread" type="range" min="8" max="42" value="27"><span id="spreadV">27°</span></div>
+  <div class="group"><b>字号</b><input id="size" type="range" min="22" max="64" value="34"><span id="sizeV">34</span></div>
+  <div class="group"><b>距离</b><input id="dist" type="range" min="6" max="20" step="0.5" value="10.5"><span id="distV">10.5</span></div>
+  <button id="replay">重播</button>
+  <span class="hint">这是算法预览，背景是示意；游戏里位置会随视角实时投影</span>
+</div>
+
+<script>
+const cv = document.getElementById('c');
+const g = cv.getContext('2d');
+
+let W = 0, H = 0, DPR = 1;
+function resize() {
+  DPR = Math.min(window.devicePixelRatio || 1, 2);
+  W = cv.clientWidth; H = cv.clientHeight;
+  cv.width = Math.round(W * DPR); cv.height = Math.round(H * DPR);
+  g.setTransform(DPR, 0, 0, DPR, 0, 0);
+}
+new ResizeObserver(resize).observe(cv);
+resize();
+
+const LYRICS = [
+  "窗外的天气 就像是你多变的表情",
+  "下雨了 雨陪我哭泣",
+  "看不清 我也不想看清",
+  "离开你 我安静的抽离",
+  "不忍揭晓的剧情 我的泪流在心里",
+  "学会放弃"
+];
+const DUR = 3.6;
+const REF_DIST = 10.5;
+const FADE = 0.85;
+const ENTER = 0.42;
+const LIFT = 3.2;
+
+let cfg = { spread: 27, size: 34, dist: 10.5, mode: 0 };
+let bubbles = [];
+let lastSide = -1;
+let idx = -1;
+let clock = 0;
+
+const FOV = 68;
+
+function reset() {
+  bubbles = []; lastSide = -1; idx = -1; clock = 0;
+  spawn(0);
+}
+reset();
+
+function spawn(i) {
+  const sign = cfg.mode === 1 ? -1 : cfg.mode === 2 ? 1 : (lastSide > 0 ? -1 : 1);
+  lastSide = sign;
+  bubbles.push({
+    i,
+    text: LYRICS[i % LYRICS.length],
+    yaw: sign * cfg.spread * (0.6 + Math.random() * 0.4),
+    pitch: 3 + Math.random() * 5,
+    dist: cfg.dist + (Math.random() * 4.4 - 1.8),
+    born: clock,
+    phase: Math.random() * 6.283,
+    retired: false,
+    retireAt: 0
+  });
+}
+
+function easeOutBack(t) {
+  const c1 = 1.28, c3 = c1 + 1, u = t - 1;
+  return 1 + c3 * u * u * u + c1 * u * u;
+}
+
+function project(b, lift) {
+  const yaw = b.yaw * Math.PI / 180;
+  const pitch = b.pitch * Math.PI / 180;
+  const dx = Math.sin(yaw) * Math.cos(pitch);
+  const dy = Math.sin(pitch);
+  const dz = Math.cos(yaw) * Math.cos(pitch);
+  const depth = Math.max(2, b.dist * dz);
+  const focal = (H * 0.5) / Math.tan(FOV * 0.5 * Math.PI / 180);
+  return {
+    x: W * 0.5 + (dx / dz) * focal,
+    y: H * 0.5 + (dy / dz) * focal - (lift / depth) * focal,
+    depth
+  };
+}
+
+function drawBackground() {
+  const sky = g.createLinearGradient(0, 0, 0, H);
+  sky.addColorStop(0, '#1d2a33');
+  sky.addColorStop(0.55, '#22303a');
+  sky.addColorStop(1, '#141a1f');
+  g.fillStyle = sky;
+  g.fillRect(0, 0, W, H);
+
+  g.fillStyle = 'rgba(120,160,170,0.10)';
+  g.beginPath();
+  g.moveTo(0, H * 0.66);
+  for (let x = 0; x <= W; x += 60) {
+    g.lineTo(x, H * 0.66 - Math.sin(x * 0.006) * 34 - Math.sin(x * 0.013 + 1) * 16);
+  }
+  g.lineTo(W, H); g.lineTo(0, H); g.closePath(); g.fill();
+
+  g.fillStyle = 'rgba(10,14,18,0.72)';
+  g.beginPath();
+  g.moveTo(0, H * 0.82);
+  for (let x = 0; x <= W; x += 40) {
+    g.lineTo(x, H * 0.82 - Math.sin(x * 0.011 + 2) * 24 - Math.sin(x * 0.027) * 9);
+  }
+  g.lineTo(W, H); g.lineTo(0, H); g.closePath(); g.fill();
+
+  g.strokeStyle = 'rgba(255,255,255,0.16)';
+  g.lineWidth = 1;
+  g.beginPath(); g.moveTo(W * 0.5 - 7, H * 0.5); g.lineTo(W * 0.5 + 7, H * 0.5);
+  g.moveTo(W * 0.5, H * 0.5 - 7); g.lineTo(W * 0.5, H * 0.5 + 7); g.stroke();
+}
+
+function drawTextAt(text, cx, cy, size, alpha, litRatio, jitter) {
+  g.save();
+  g.font = `700 ${size}px "Microsoft YaHei UI","Microsoft YaHei",sans-serif`;
+  g.textBaseline = 'middle';
+  g.textAlign = 'left';
+
+  const w = g.measureText(text).width;
+  let x = cx - w * 0.5 + jitter.x;
+  const y = cy + jitter.y;
+
+  // 简单限位，别整句跑出屏幕
+  if (x < 80 - w) x = 80 - w;
+  if (x > W - 80) x = W - 80;
+
+  g.shadowColor = 'rgba(0,0,0,0.85)';
+  g.shadowBlur = 6;
+
+  if (litRatio === null) {
+    g.globalAlpha = alpha * 0.92;
+    g.fillStyle = '#ffffff';
+    g.fillText(text, x, y);
+  } else {
+    g.globalAlpha = alpha * 0.34;
+    g.fillStyle = '#ffffff';
+    g.fillText(text, x, y);
+
+    g.shadowBlur = 10;
+    g.globalAlpha = alpha;
+    g.save();
+    g.beginPath();
+    g.rect(x - 2, y - size, w * litRatio + 2, size * 2);
+    g.clip();
+    g.fillText(text, x, y);
+    g.restore();
+  }
+
+  g.restore();
+}
+
+function frame(ts) {
+  const dt = Math.min(0.05, (ts - (frame.prev || ts)) / 1000);
+  frame.prev = ts;
+  clock += dt;
+
+  const want = Math.floor(clock / DUR);
+  if (want !== idx) {
+    bubbles.forEach(b => { if (!b.retired) { b.retired = true; b.retireAt = clock; } });
+    idx = want;
+    spawn(want % LYRICS.length);
+  }
+  bubbles = bubbles.filter(b => !(b.retired && clock - b.retireAt > FADE + 0.08));
+
+  drawBackground();
+
+  bubbles.sort((a, b) => b.dist - a.dist);
+
+  for (const b of bubbles) {
+    const age = clock - b.born;
+    const enter = Math.min(1, age / ENTER);
+    const eE = easeOutBack(enter);
+    let alpha = Math.min(1, enter * 1.8);
+    let lift = 0, shake = 0;
+
+    if (b.retired) {
+      const f = Math.min(1, (clock - b.retireAt) / FADE);
+      alpha *= 1 - f;
+      lift = f * f * LIFT;
+      shake = Math.sin(f * 26 + b.phase) * 7 * f;
+    }
+    if (alpha <= 0.01) continue;
+
+    const p = project(b, lift);
+    const size = Math.max(11, Math.min(120, cfg.size * (REF_DIST / p.depth) * (0.9 + 0.1 * eE)));
+
+    const active = !b.retired && b.i === (idx % LYRICS.length);
+    let jx = 0, jy = 0;
+    if (active) {
+      jx = Math.sin(clock * 11.3 + b.phase * 3.1) * 0.9 + Math.sin(clock * 23.7 + b.phase) * 0.4;
+      jy = Math.cos(clock * 12.9 + b.phase * 2.3) * 0.7;
+    }
+    jx += shake;
+
+    const yOff = (1 - eE) * 16;
+    const lit = active
+      ? Math.max(0, Math.min(1, ((clock - b.i * DUR) % DUR) / (DUR * 0.82)))
+      : null;
+
+    drawTextAt(b.text, p.x, p.y + yOff, size, alpha, lit, { x: jx, y: jy });
+  }
+
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+
+// ── 控制 ──
+const btns = [document.getElementById('m0'), document.getElementById('m1'), document.getElementById('m2')];
+btns.forEach((el, i) => el.onclick = () => {
+  cfg.mode = i;
+  btns.forEach((b, j) => b.classList.toggle('on', i === j));
+});
+
+document.getElementById('spread').oninput = e => {
+  cfg.spread = +e.target.value;
+  document.getElementById('spreadV').textContent = cfg.spread + '°';
+};
+document.getElementById('size').oninput = e => {
+  cfg.size = +e.target.value;
+  document.getElementById('sizeV').textContent = cfg.size;
+};
+document.getElementById('dist').oninput = e => {
+  cfg.dist = +e.target.value;
+  document.getElementById('distV').textContent = cfg.dist.toFixed(1);
+  reset();
+};
+document.getElementById('replay').onclick = reset;
+</script>
+</body>
+</html>

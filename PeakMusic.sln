@@ -1,0 +1,34 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.0.31903.59
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "PeakMusic.Core", "PeakMusic.Core\PeakMusic.Core.csproj", "{9523BE81-2BA5-4BC6-9ECE-96EAB6F0801F}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "PeakMusic.Sandbox", "PeakMusic.Sandbox\PeakMusic.Sandbox.csproj", "{F952CE36-BEE4-4437-A5CD-D91865346DAC}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "PeakMusic", "PeakMusic\PeakMusic.csproj", "{6A38E908-E0E4-4554-9161-22A349A59DD1}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{9523BE81-2BA5-4BC6-9ECE-96EAB6F0801F}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{9523BE81-2BA5-4BC6-9ECE-96EAB6F0801F}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{9523BE81-2BA5-4BC6-9ECE-96EAB6F0801F}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{9523BE81-2BA5-4BC6-9ECE-96EAB6F0801F}.Release|Any CPU.Build.0 = Release|Any CPU
+		{F952CE36-BEE4-4437-A5CD-D91865346DAC}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{F952CE36-BEE4-4437-A5CD-D91865346DAC}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{F952CE36-BEE4-4437-A5CD-D91865346DAC}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{F952CE36-BEE4-4437-A5CD-D91865346DAC}.Release|Any CPU.Build.0 = Release|Any CPU
+		{6A38E908-E0E4-4554-9161-22A349A59DD1}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{6A38E908-E0E4-4554-9161-22A349A59DD1}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{6A38E908-E0E4-4554-9161-22A349A59DD1}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{6A38E908-E0E4-4554-9161-22A349A59DD1}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+EndGlobal

@@ -1,0 +1,422 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>PeakMusic v3 · 多音源面板 + 漂浮歌词</title>
+<style>
+  :root{
+    /* 丝绒玫瑰（MuoniumPlayer 默认主题） */
+    --bg:#211821; --elem:#30212C; --hover:#493342;
+    --text:#FFF7FB; --text2:#C2AAB7;
+    --accent:#E48AAB; --accent-hi:#F4A9C4;
+    --input:#2A1D27; --nav:#1A1219; --border:#604252;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{height:100%}
+  body{
+    background:#0a0a0c; color:var(--text);
+    font-family:"Microsoft YaHei UI","Microsoft YaHei","Segoe UI",system-ui,sans-serif;
+    display:flex; flex-direction:column; align-items:center;
+    padding:22px 20px 40px; gap:18px;
+  }
+
+  /* ── 顶部工具条 ── */
+  .toolbar{display:flex;gap:8px;align-items:center;flex-wrap:wrap;justify-content:center}
+  .toolbar .lab{font-size:12px;color:#7c8494;margin-right:4px}
+  .tb{
+    padding:6px 14px;border-radius:999px;border:1px solid #2c3140;
+    background:#14161b;color:#b6bdcc;font-size:12px;cursor:pointer;
+    transition:.15s; font-family:inherit;
+  }
+  .tb:hover{background:#1d2028;color:#e6ebf5}
+  .tb.on{background:#2a1d27;border-color:var(--accent);color:var(--accent-hi)}
+
+  /* ── 场景容器：模拟游戏画面 + 漂浮歌词 ── */
+  .stage{
+    position:relative;width:980px;height:552px;border-radius:12px;overflow:hidden;
+    background:
+      radial-gradient(120% 90% at 50% 8%, #2d4152 0%, #1b2833 38%, #0d1319 72%, #070a0d 100%);
+    box-shadow:0 20px 60px rgba(0,0,0,.65), inset 0 0 120px rgba(0,0,0,.5);
+    border:1px solid #1c232c;
+  }
+  /* 远景雪山剪影，纯粹为了让"浮在画面上"这件事看得出来 */
+  .mtn{position:absolute;left:0;right:0;bottom:0;height:46%;
+       background:linear-gradient(to top,#05080b 0%,#0d151c 55%,rgba(13,21,28,0) 100%);
+       clip-path:polygon(0 100%,0 62%,9% 40%,17% 56%,26% 26%,35% 52%,44% 18%,54% 48%,63% 30%,72% 55%,82% 34%,91% 58%,100% 44%,100% 100%)}
+  .haze{position:absolute;left:0;right:0;bottom:0;height:34%;
+        background:linear-gradient(to top,rgba(120,160,190,.14),transparent)}
+  .vignette{position:absolute;inset:0;box-shadow:inset 0 0 160px 40px rgba(0,0,0,.7);pointer-events:none}
+
+  /* ── 漂浮歌词 ── */
+  .lyric{
+    position:absolute;left:0;right:0;top:46%;transform:translateY(-50%);
+    text-align:center;pointer-events:none;
+    font-family:"Microsoft YaHei UI","Microsoft YaHei",sans-serif;
+  }
+  .ly-prev{
+    font-size:20px;font-weight:400;color:rgba(255,255,255,.42);
+    text-shadow:0 0 10px rgba(0,0,0,.95),0 1px 3px rgba(0,0,0,1),0 0 26px rgba(0,0,0,.8);
+    margin-bottom:22px;letter-spacing:.5px;
+  }
+  .ly-cur{
+    font-size:38px;font-weight:700;letter-spacing:1.5px;line-height:1.25;
+    display:inline-block;position:relative;
+    text-shadow:0 0 12px rgba(0,0,0,.95),0 2px 6px rgba(0,0,0,1),0 0 40px rgba(0,0,0,.85);
+  }
+  /* 未唱部分：暗白 */
+  .ly-cur .base{color:rgba(255,255,255,.36)}
+  /* 已唱部分：叠在上面，用 clip 裁出宽度 —— 和 C# 里 GUI.BeginClip 完全同一套思路 */
+  .ly-cur .lit{
+    position:absolute;left:0;top:0;color:#fff;white-space:nowrap;
+    clip-path:inset(0 46% 0 0);
+    text-shadow:0 0 12px rgba(0,0,0,.95),0 2px 6px rgba(0,0,0,1),
+                0 0 22px rgba(228,138,171,.55),0 0 46px rgba(228,138,171,.3);
+  }
+  .ly-next{
+    font-size:20px;color:rgba(255,255,255,.30);
+    text-shadow:0 0 10px rgba(0,0,0,.95),0 1px 3px rgba(0,0,0,1);
+    margin-top:18px;letter-spacing:.5px;
+  }
+  /* 唱到的位置下面一小段微光 */
+  .ly-cursor{
+    position:absolute;height:2px;width:24px;border-radius:2px;
+    background:rgba(255,255,255,.55);
+    filter:blur(1px);
+    left:calc(50% - 24px);top:calc(100% + 4px);
+  }
+
+  /* ── 面板 ── */
+  .panel{
+    position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);
+    width:832px;height:auto;border-radius:14px;
+    background:color-mix(in srgb, var(--bg) 97%, transparent);
+    border:1px solid var(--border);
+    box-shadow:0 30px 80px rgba(0,0,0,.8);
+    display:flex;gap:0;padding:14px;
+  }
+  .nav{
+    width:96px;flex:0 0 96px;background:var(--elem);border:1px solid var(--border);
+    border-radius:12px;padding:10px 6px;display:flex;flex-direction:column;gap:6px;
+  }
+  .nav-item{
+    position:relative;border-radius:8px;padding:7px 8px 7px 28px;cursor:pointer;
+    transition:.15s;
+  }
+  .nav-item:hover{background:var(--hover)}
+  .nav-item.on{background:color-mix(in srgb,var(--accent) 13%,transparent)}
+  .nav-item.on::before{
+    content:"";position:absolute;left:2px;top:8px;bottom:8px;width:2px;
+    border-radius:2px;background:var(--accent);
+  }
+  .dot{position:absolute;left:12px;top:50%;transform:translateY(-50%);
+       width:10px;height:10px;border-radius:50%}
+  .nav-name{font-size:13px;color:var(--text);line-height:1.2}
+  .nav-item.on .nav-name{font-weight:700}
+  .nav-sub{font-size:10px;color:var(--text2);opacity:.7;margin-top:2px}
+  .nav-foot{margin-top:auto;padding:0 6px 4px}
+  .nav-foot .k{font-size:10px;color:var(--text2);opacity:.6}
+  .nav-foot .v{font-size:12px;color:#8fd6a6;margin-top:2px}
+
+  .main{flex:1;padding-left:28px;min-width:0}
+
+  /* 头部 */
+  .head{display:flex;align-items:center;gap:12px;padding-bottom:12px;border-bottom:1px solid var(--border)}
+  .cov{width:52px;height:52px;border-radius:10px;flex:0 0 52px;
+       background:linear-gradient(135deg,#E48AAB,#6b3f56 55%,#3a2a38);
+       position:relative;overflow:hidden}
+  .cov::after{content:"";position:absolute;inset:0;
+       background:radial-gradient(circle at 30% 25%,rgba(255,255,255,.35),transparent 55%)}
+  .meta{flex:1;min-width:0}
+  .meta .t{font-size:16px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .meta .s{font-size:10px;color:var(--text2);opacity:.8;margin-top:3px}
+  .chip{padding:4px 10px;border-radius:11px;font-size:11px;background:rgba(255,255,255,.055);
+        border:1px solid rgba(255,255,255,.09);color:#8fd6a6;white-space:nowrap;cursor:pointer}
+  .chip.theme{color:var(--text2);border-color:color-mix(in srgb,var(--accent) 40%,transparent);
+              background:color-mix(in srgb,var(--accent) 10%,transparent)}
+
+  /* 搜索行 */
+  .search{display:flex;gap:8px;margin-top:12px}
+  .field{flex:1;height:36px;border-radius:9px;background:var(--input);
+         border:1.6px solid var(--accent);display:flex;align-items:center;padding:0 13px;
+         font-size:14px;color:var(--text);position:relative}
+  .caret{width:1.5px;height:16px;background:var(--accent);margin-left:1px;
+         animation:blink 1s steps(1) infinite}
+  @keyframes blink{50%{opacity:0}}
+  .btn{height:36px;padding:0 18px;border-radius:9px;font-size:13px;display:flex;
+       align-items:center;justify-content:center;cursor:pointer;transition:.15s;
+       background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.08);color:var(--text)}
+  .btn:hover{background:rgba(255,255,255,.13)}
+  .btn.primary{background:var(--accent);border-color:var(--accent-hi);color:#1b1218;font-weight:700}
+  .btn.primary:hover{background:var(--accent-hi)}
+
+  /* 预设胶囊 */
+  .chips{display:flex;gap:8px;margin-top:12px}
+  .pill{padding:5px 14px;border-radius:13px;font-size:12px;cursor:pointer;
+        color:var(--accent-hi);background:color-mix(in srgb,var(--accent) 10%,transparent);
+        border:1px solid color-mix(in srgb,var(--accent) 32%,transparent);transition:.15s}
+  .pill:hover{background:color-mix(in srgb,var(--accent) 22%,transparent);
+              border-color:color-mix(in srgb,var(--accent) 62%,transparent)}
+
+  .status{font-size:12px;color:var(--text2);opacity:.75;margin:10px 0 6px}
+
+  /* 列表 */
+  .list{background:rgba(0,0,0,.22);border:1px solid rgba(255,255,255,.05);
+        border-radius:12px;padding:4px}
+  .row{position:relative;display:flex;align-items:center;height:40px;padding:0 12px;
+       border-radius:7px;cursor:pointer;transition:.12s}
+  .row:hover{background:color-mix(in srgb,var(--accent) 13%,transparent)}
+  .row.play{background:color-mix(in srgb,var(--accent) 8%,transparent)}
+  .row.play::before{content:"";position:absolute;left:2px;top:9px;bottom:9px;width:2px;
+       border-radius:2px;background:var(--accent)}
+  .row .no{width:24px;font-size:11px;color:var(--text2);opacity:.55;text-align:center}
+  .row .mini{width:30px;height:30px;border-radius:7px;margin-right:10px;flex:0 0 30px;
+       background:linear-gradient(135deg,var(--accent),#4a3040);opacity:.85}
+  .row:hover .nm,.row.play .nm{color:#fff;font-weight:700}
+  .row .nm{flex:1;font-size:14px;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .row .ar{width:120px;font-size:12px;color:var(--text2);text-align:right;
+           white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .row .du{width:80px;font-size:12px;color:var(--text2);opacity:.6;text-align:right}
+  .tag{font-size:11px;margin-left:4px}
+
+  /* 翻页 */
+  .pager{display:flex;align-items:center;gap:8px;margin-top:12px}
+  .pager .info{font-size:13px;color:var(--text2);opacity:.8;margin-left:4px}
+
+  /* 底部播放条 */
+  .bar{margin-top:12px;background:var(--nav);border:1px solid var(--border);
+       border-radius:14px;padding:12px 16px 14px;position:relative}
+  .pline{height:3px;border-radius:2px;background:rgba(255,255,255,.08);position:relative;overflow:hidden}
+  .pline i{position:absolute;left:0;top:0;bottom:0;width:37%;background:var(--accent);border-radius:2px}
+  .barrow{display:flex;align-items:center;margin-top:12px}
+  .time{font-size:12px;color:var(--text2);width:100px}
+  .state{font-size:12px;color:var(--text2);width:100px}
+  .state b{color:var(--accent)}
+  .center{flex:1;display:flex;justify-content:center;align-items:center;gap:12px}
+  .round{width:44px;height:44px;border-radius:50%;background:var(--accent);color:#1b1218;
+         display:flex;align-items:center;justify-content:center;font-size:14px;font-weight:700;
+         cursor:pointer;transition:.15s}
+  .round:hover{background:var(--accent-hi)}
+  .vol{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--text2)}
+  .sq{width:32px;height:30px;border-radius:8px;background:rgba(255,255,255,.06);
+      border:1px solid rgba(255,255,255,.08);display:flex;align-items:center;
+      justify-content:center;cursor:pointer;font-size:14px}
+  .sq:hover{background:rgba(255,255,255,.13)}
+
+  .foot{display:flex;justify-content:space-between;font-size:11px;
+        color:var(--text2);opacity:.55;margin-top:10px}
+
+  .hint{font-size:12px;color:#6b7280;text-align:center;max-width:900px;line-height:1.7}
+  .hint b{color:#9aa4b4}
+</style>
+</head>
+<body>
+
+<div class="toolbar">
+  <span class="lab">配色</span>
+  <button class="tb on" data-p="rose">丝绒玫瑰</button>
+  <button class="tb" data-p="graphite">午夜石墨</button>
+  <button class="tb" data-p="aurora">极光海</button>
+  <button class="tb" data-p="obsidian">曜石红</button>
+  <span class="lab" style="margin-left:14px">视图</span>
+  <button class="tb on" id="vBoth">面板 + 歌词</button>
+  <button class="tb" id="vLyric">只看歌词</button>
+</div>
+
+<div class="stage" id="stage">
+  <div class="haze"></div>
+  <div class="mtn"></div>
+
+  <!-- 漂浮歌词 -->
+  <div class="lyric" id="lyric">
+    <div class="ly-prev">不忍揭晓的剧情</div>
+    <div class="ly-cur">
+      <span class="base">我的泪流在心里</span>
+      <span class="lit">我的泪流在心里</span>
+      <span class="ly-cursor"></span>
+    </div>
+    <div class="ly-next">学会放弃</div>
+  </div>
+
+  <!-- 面板 -->
+  <div class="panel" id="panel">
+    <!-- 左侧音源导航 -->
+    <div class="nav">
+      <div class="nav-item on" data-src="netease">
+        <span class="dot" style="background:#E94747"></span>
+        <div class="nav-name">网易云</div>
+        <div class="nav-sub">当前音源</div>
+      </div>
+      <div class="nav-item" data-src="qq">
+        <span class="dot" style="background:#31C27C"></span>
+        <div class="nav-name">QQ音乐</div>
+        <div class="nav-sub">点击切换</div>
+      </div>
+      <div class="nav-foot">
+        <div class="k">歌词</div>
+        <div class="v">F4 已开</div>
+      </div>
+    </div>
+
+    <div class="main">
+      <!-- 头部：正在播放 -->
+      <div class="head">
+        <div class="cov"></div>
+        <div class="meta">
+          <div class="t">雨爱</div>
+          <div class="s">杨丞琳　·　雨爱</div>
+        </div>
+        <div class="chip theme">丝绒玫瑰</div>
+        <div class="chip">就绪</div>
+      </div>
+
+      <!-- 搜索 -->
+      <div class="search">
+        <div class="field">雨爱<span class="caret"></span></div>
+        <div class="btn primary">搜索</div>
+        <div class="btn">清空</div>
+      </div>
+
+      <div class="chips">
+        <div class="pill">雨爱</div>
+        <div class="pill">下雨天</div>
+        <div class="pill">江南</div>
+        <div class="pill">晴天</div>
+      </div>
+
+      <div class="status">搜到 40 首 · 第 1/5 页，点一行播放</div>
+
+      <!-- 列表 -->
+      <div class="list">
+        <div class="row play">
+          <div class="no">01</div><div class="mini"></div>
+          <div class="nm">雨爱</div><div class="ar">杨丞琳</div>
+          <div class="du">4:20<span class="tag" style="color:#EC4141">VIP</span></div>
+        </div>
+        <div class="row">
+          <div class="no">02</div><div class="mini"></div>
+          <div class="nm">雨爱 (司凤版)</div><div class="ar">古岛斐</div>
+          <div class="du">2:19</div>
+        </div>
+        <div class="row">
+          <div class="no">03</div><div class="mini"></div>
+          <div class="nm">雨爱</div><div class="ar">张德伊玲</div>
+          <div class="du">4:19</div>
+        </div>
+        <div class="row">
+          <div class="no">04</div><div class="mini"></div>
+          <div class="nm">雨爱 (Live)</div><div class="ar">汪苏泷 / 吉克隽逸</div>
+          <div class="du">4:34<span class="tag" style="color:#EC4141">VIP</span></div>
+        </div>
+        <div class="row">
+          <div class="no">05</div><div class="mini"></div>
+          <div class="nm">下雨天</div><div class="ar">南拳妈妈</div>
+          <div class="du">4:31</div>
+        </div>
+        <div class="row">
+          <div class="no">06</div><div class="mini"></div>
+          <div class="nm">雨爱 (超燃DJ版)</div><div class="ar">DJ.Lee</div>
+          <div class="du">5:24<span class="tag" style="color:#EC4141">VIP</span></div>
+        </div>
+        <div class="row">
+          <div class="no">07</div><div class="mini"></div>
+          <div class="nm">雨爱 (司风版)</div><div class="ar">时年先生</div>
+          <div class="du">3:54</div>
+        </div>
+        <div class="row">
+          <div class="no">08</div><div class="mini"></div>
+          <div class="nm">雨爱 (Live)</div><div class="ar">马嘉祺 / 丁程鑫</div>
+          <div class="du">4:34<span class="tag" style="color:#F9C26A">付费</span></div>
+        </div>
+      </div>
+
+      <!-- 翻页 -->
+      <div class="pager">
+        <div class="btn" style="opacity:.35">上一页</div>
+        <div class="btn">下一页</div>
+        <div class="info">第 1 / 5 页　·　共 40 首　·　列表内滚轮翻页</div>
+      </div>
+
+      <!-- 底部播放条 -->
+      <div class="bar">
+        <div class="pline"><i></i></div>
+        <div class="barrow">
+          <div class="time">01:32　/　04:20</div>
+          <div class="state"><b>●</b>　播放中</div>
+          <div class="center">
+            <div class="btn" style="height:30px;padding:0 16px">停止</div>
+            <div class="round">暂停</div>
+          </div>
+          <div class="vol">
+            <div class="sq">−</div>
+            80%
+            <div class="sq">+</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="foot">
+        <span>网易云已登录</span>
+        <span>F1/F2 面板　·　F4 歌词(开)　·　T 输入　·　回车搜索　·　Esc 取消</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="vignette"></div>
+</div>
+
+<div class="hint">
+  <b>左上是悬浮歌词在游戏画面里的实际样子</b>：当前行大字，已唱部分亮白 + 品牌色微光，未唱部分压暗；
+  上一行、下一行缩小淡化。面板是 <b>832×696</b>，左侧 96px 是音源导航（网易云 / QQ，点一下切源并清空列表）。
+  <br>点顶部按钮可切换四套配色；点「只看歌词」可以把面板收起来，单独看歌词效果。
+</div>
+
+<script>
+  const themes = {
+    rose:     {bg:'#211821',elem:'#30212C',hover:'#493342',text:'#FFF7FB',text2:'#C2AAB7',accent:'#E48AAB',hi:'#F4A9C4',input:'#2A1D27',nav:'#1A1219',border:'#604252'},
+    graphite: {bg:'#111419',elem:'#1B2028',hover:'#323B49',text:'#F5F7FA',text2:'#A3ACBA',accent:'#8FA8C7',hi:'#B4C8E5',input:'#202731',nav:'#0C0F14',border:'#4C5869'},
+    aurora:   {bg:'#0D1720',elem:'#142631',hover:'#203D4A',text:'#EFFBFF',text2:'#91AAB5',accent:'#54D6C1',hi:'#7DE8D6',input:'#10212B',nav:'#091118',border:'#2B5160'},
+    obsidian: {bg:'#1E1E1E',elem:'#252525',hover:'#383838',text:'#FFFFFF',text2:'#9B9B9B',accent:'#D60017',hi:'#F04455',input:'#292727',nav:'#191919',border:'#454545'}
+  };
+
+  function applyTheme(k){
+    const t = themes[k], r = document.documentElement.style;
+    r.setProperty('--bg',t.bg); r.setProperty('--elem',t.elem); r.setProperty('--hover',t.hover);
+    r.setProperty('--text',t.text); r.setProperty('--text2',t.text2);
+    r.setProperty('--accent',t.accent); r.setProperty('--accent-hi',t.hi);
+    r.setProperty('--input',t.input); r.setProperty('--nav',t.nav); r.setProperty('--border',t.border);
+    // 歌词微光跟着强调色走，跟游戏里一致
+    document.querySelectorAll('.lit').forEach(e=>{
+      e.style.textShadow = `0 0 12px rgba(0,0,0,.95),0 2px 6px rgba(0,0,0,1),0 0 22px ${t.accent}88,0 0 46px ${t.accent}4d`;
+    });
+  }
+
+  document.querySelectorAll('.tb[data-p]').forEach(b=>{
+    b.onclick = ()=>{
+      document.querySelectorAll('.tb[data-p]').forEach(x=>x.classList.remove('on'));
+      b.classList.add('on');
+      applyTheme(b.dataset.p);
+    };
+  });
+
+  const panel = document.getElementById('panel');
+  const vBoth = document.getElementById('vBoth');
+  const vLyric = document.getElementById('vLyric');
+  vBoth.onclick = ()=>{ panel.style.display='flex'; vBoth.classList.add('on'); vLyric.classList.remove('on'); };
+  vLyric.onclick = ()=>{ panel.style.display='none'; vLyric.classList.add('on'); vBoth.classList.remove('on'); };
+
+  // 音源切换演示
+  document.querySelectorAll('.nav-item').forEach(it=>{
+    it.onclick = ()=>{
+      document.querySelectorAll('.nav-item').forEach(x=>{
+        x.classList.remove('on');
+        x.querySelector('.nav-sub').textContent = '点击切换';
+      });
+      it.classList.add('on');
+      it.querySelector('.nav-sub').textContent = '当前音源';
+    };
+  });
+
+  applyTheme('rose');
+</script>
+</body>
+</html>

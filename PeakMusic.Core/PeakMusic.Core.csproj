@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net472</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <RootNamespace>PeakMusic.Core</RootNamespace>
+    <AssemblyName>PeakMusic.Core</AssemblyName>
+    <Version>0.1.0</Version>
+    <!-- 纯 C#：加密 / HTTP / JSON / 歌词解析。禁止引用任何 UnityEngine，也不要引用游戏 DLL。 -->
+    <GameDir>D:\Steam\steamapps\common\PEAK</GameDir>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies" Version="1.0.3" PrivateAssets="all" />
+    <!-- net472 的 SDK 风格工程不会自动带 System.Net.Http，必须显式引，否则 HttpClient 编不过 -->
+    <Reference Include="System.Net.Http" />
+    <!-- PNG 解码用 DeflateStream（QQ 二维码图片） -->
+    <Reference Include="System.IO.Compression" />
+  </ItemGroup>
+
+</Project>

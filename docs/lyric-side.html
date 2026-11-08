@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>PEAK Music · 贴边歌词预览</title>
+<style>
+  :root{
+    --fs: 34px;            /* 当前行字号，对齐 LyricSize */
+    --gap: 1.55;           /* 行距系数，对齐 LineGapCoef */
+    --block: 36vw;         /* 块宽，对齐 blockW */
+    --edge: 3.5vw;         /* 贴边留白 */
+    --accent: #E48AAB;
+  }
+  *{box-sizing:border-box; margin:0; padding:0}
+  html,body{height:100%; overflow:hidden; font-family:"Microsoft YaHei UI","Microsoft YaHei",sans-serif;}
+
+  /* ── 模拟游戏画面：截图里的泳池馆 ── */
+  .scene{
+    position:fixed; inset:0;
+    background:
+      linear-gradient(180deg,#dff0f6 0%,#eaf6fa 38%,#cfe8f2 52%,#1d4f9e 52.2%,#2a63bb 66%,#7fb6d8 66.2%,#b9d7e6 100%);
+  }
+  .scene::before{
+    content:""; position:absolute; inset:0;
+    background:
+      radial-gradient(ellipse at 50% 78%, rgba(255,255,255,.35), transparent 60%),
+      repeating-linear-gradient(90deg, rgba(255,255,255,.10) 0 2px, transparent 2px 120px);
+    opacity:.7;
+  }
+  .hud{
+    position:absolute; inset:0; pointer-events:none;
+    color:#fff; font-size:12px; text-shadow:0 1px 2px rgba(0,0,0,.45);
+  }
+  .hud .clock{position:absolute; left:50%; top:10px; transform:translateX(-50%);
+    background:rgba(0,0,0,.45); padding:4px 14px; border-radius:4px; font-size:13px;}
+  .hud .hp{position:absolute; left:24px; bottom:22px; width:260px; height:16px;
+    border-radius:9px; background:#2b6b2b; border:1px solid rgba(255,255,255,.5);}
+  .hud .hp i{display:block; height:100%; width:100%; border-radius:9px; background:#5fd12e;}
+  .hud .hp b{position:absolute; inset:0; text-align:center; line-height:16px; font-size:11px;}
+
+  /* ── 歌词块 ── */
+  #lyrics{
+    position:absolute; top:46vh; transform:translateY(-50%);
+    width:var(--block); left:var(--edge);
+    height:calc(var(--fs) * var(--gap));
+    transition:left .28s cubic-bezier(.22,1,.36,1), width .28s;
+  }
+  #lyrics.center{left:calc((100vw - var(--block)) / 2); width:78vw; text-align:center;}
+  #lyrics.right{left:auto; right:var(--edge); text-align:right;}
+
+  .line{
+    position:absolute; left:0; top:0; width:100%;
+    height:calc(var(--fs) * var(--gap));
+    line-height:calc(var(--fs) * var(--gap));
+    font-size:calc(var(--fs) * .74);
+    font-weight:700; color:#fff; white-space:nowrap;
+    transition:font-size .22s ease, opacity .3s ease;
+    will-change:transform;
+  }
+  .line.cur{font-size:var(--fs);}
+  .line .base{color:rgba(255,255,255,.42);}
+  .line .mask{position:relative; display:inline-block;}
+  .line .mask .fill{
+    position:absolute; left:0; top:0; white-space:nowrap;
+    color:#fff; clip-path:inset(0 calc(100% - var(--p,0%)) 0 0);
+    text-shadow:0 0 18px rgba(255,255,255,.35);
+  }
+  .line:not(.cur) .mask .fill{display:none;}
+
+  .all{position:absolute; inset:0; pointer-events:none;}
+  .shadow, .top{
+    position:absolute; left:0; top:0; white-space:nowrap; font-weight:700;
+  }
+  /* 描边：4 向偏移的黑字垫底（对齐 DrawShadowed） */
+  .line .mask{text-shadow:
+      -1.2px 0 rgba(0,0,0,.8), 1.2px 0 rgba(0,0,0,.8),
+      0 -1.2px rgba(0,0,0,.8), 0 1.2px rgba(0,0,0,.8);}
+
+  /* ── 控制条 ── */
+  .bar{
+    position:absolute; right:16px; top:14px; display:flex; gap:8px; z-index:9;
+  }
+  .bar button{
+    background:rgba(12,14,18,.72); color:#E7EAF0; border:1px solid rgba(255,255,255,.16);
+    border-radius:8px; padding:6px 12px; font-size:12px; cursor:pointer; backdrop-filter:blur(8px);
+  }
+  .bar button.on{background:var(--accent); color:#22161b; border-color:transparent; font-weight:700;}
+  .tip{position:absolute; right:16px; top:52px; color:#fff; font-size:11px; opacity:.6; text-align:right;}
+</style>
+</head>
+<body>
+<div class="scene">
+  <div class="hud">
+    <div class="clock">DAY 19:39</div>
+    <div class="hp"><i></i><b>100</b></div>
+  </div>
+</div>
+
+<div class="bar">
+  <button data-side="left" class="on">左侧</button>
+  <button data-side="center">正中</button>
+  <button data-side="right">右侧</button>
+</div>
+<div class="tip">点右上角切换位置 · 这就是游戏里的实际观感</div>
+
+<div id="lyrics">
+  <div class="line" data-i="0"><span class="base">窗外的天气 就像是你多变的表情</span><span class="mask"><span class="base">窗外的天气 就像是你多变的表情</span><span class="fill">窗外的天气 就像是你多变的表情</span></span></div>
+  <div class="line" data-i="1"><span class="base">下雨了 雨陪我哭泣</span><span class="mask"><span class="base">下雨了 雨陪我哭泣</span><span class="fill">下雨了 雨陪我哭泣</span></span></div>
+  <div class="line" data-i="2"><span class="base">看不清 我也不想看清</span><span class="mask"><span class="base">看不清 我也不想看清</span><span class="fill">看不清 我也不想看清</span></span></div>
+  <div class="line" data-i="3"><span class="base">离开你 我安静的抽离</span><span class="mask"><span class="base">离开你 我安静的抽离</span><span class="fill">离开你 我安静的抽离</span></span></div>
+  <div class="line" data-i="4"><span class="base">不忍揭晓的剧情 我的泪流在心里</span><span class="mask"><span class="base">不忍揭晓的剧情 我的泪流在心里</span><span class="fill">不忍揭晓的剧情 我的泪流在心里</span></span></div>
+  <div class="line" data-i="5"><span class="base">学会放弃</span><span class="mask"><span class="base">学会放弃</span><span class="fill">学会放弃</span></span></div>
+  <div class="line" data-i="6"><span class="base">听雨的声音 一滴滴清晰</span><span class="mask"><span class="base">听雨的声音 一滴滴清晰</span><span class="fill">听雨的声音 一滴滴清晰</span></span></div>
+</div>
+
+<script>
+(function(){
+  const box = document.getElementById('lyrics');
+  const lines = Array.from(document.querySelectorAll('.line'));
+  const TIER = [1, .52, .26, .12, 0];       // 对齐 LyricOverlay.TierAlpha
+  const DUR = [4200, 3600, 4200, 3800, 5000, 2400, 4200];  // 每行持续 ms
+
+  let idx = 0, t0 = performance.now(), t = 0;
+
+  function setSide(side){
+    box.classList.toggle('center', side === 'center');
+    box.classList.toggle('right', side === 'right');
+    document.querySelectorAll('.bar button').forEach(b =>
+      b.classList.toggle('on', b.dataset.side === side));
+  }
+  document.querySelectorAll('.bar button').forEach(b =>
+    b.onclick = () => setSide(b.dataset.side));
+
+  function frame(now){
+    t = now - t0;
+    let acc = 0, cur = 0;
+    for (let i = 0; i < DUR.length; i++){
+      if (t < acc + DUR[i]) { cur = i; break; }
+      acc += DUR[i];
+      if (i === DUR.length - 1) { t0 = now; t = 0; cur = 0; acc = 0; }
+    }
+    const p = Math.min(1, (t - acc) / DUR[cur]);
+    const fs = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--fs'));
+    const lineH = fs * 1.55;
+    // 连续滚动：用"行小数"作偏移，观感上整块是滑过去的，不是一行一行跳
+    const scroll = cur + Math.min(1, p * 1.06);
+
+    lines.forEach((el, i) => {
+      const d = i - cur;
+      const tier = Math.min(Math.abs(d), TIER.length - 1);
+      const on = d === 0;
+
+      el.classList.toggle('cur', on);
+      el.style.opacity = on ? 1 : TIER[tier];
+      el.style.transform = 'translateY(' + ((i - scroll) * lineH).toFixed(1) + 'px)';
+      if (on) el.querySelector('.mask .fill').style.setProperty('--p', (p * 100).toFixed(1) + '%');
+    });
+
+    requestAnimationFrame(frame);
+  }
+  // 初始：把第 0 行放到中线
+  requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>
