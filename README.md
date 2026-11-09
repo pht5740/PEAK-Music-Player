@@ -1,10 +1,23 @@
 # PEAK Music Player（PeakMusic）
 
-> 在 PEAK 游戏里听歌的 BepInEx 插件 —— 搜索网易云音乐 / QQ音乐直接放歌，3D 悬浮歌词跟着视角走，联机「一起听」全房间同步，游戏内扫码登录。
+> 在 PEAK 游戏里听歌的 BepInEx 插件 —— 搜索网易云音乐 / QQ音乐直接放歌，会员账号能放会员曲，歌单与收藏同步，3D 悬浮歌词跟着视角走，联机「一起听」全房间同步，游戏内扫码登录。
 
 爬山再累，也要有 BGM。按一下快捷键，搜索框敲歌名，点一行就播——不切窗口、不戴第二副耳机。
 
-![PEAK Music Player](docs/images/hero.jpg)
+![PEAK Music Player](https://raw.githubusercontent.com/pht5740/PEAK-Music-Player/main/docs/images/hero.jpg)
+
+---
+
+## 界面
+
+默认是新版深色面板：左侧栏放平台切换、我的收藏、一起听和歌词设置，底部一张账号卡；主区是页头 + 搜索 + 歌曲列表 + 浮动播放条。
+
+不喜欢或遇到问题，两种方式回到经典界面：
+
+1. 打开 `BepInEx/config/peak.music.ui.cfg`，把 `NewPanel = false`，重进游戏；
+2. 或者直接删掉 `BepInEx/plugins/PeakMusic/PeakMusic.UI.dll`。
+
+两种方式都不影响搜索、播放、歌词和一起听 —— 新界面只换「画法」，不换「逻辑」。
 
 ---
 
@@ -12,47 +25,49 @@
 
 1. **搜索播放**：面板输入歌名/歌手/歌词关键词，点一行即播。网易云音乐、QQ音乐双平台可切换，搜索各查各的、结果分页浏览；免费曲不登录也能放。
 
-2. **3D 悬浮歌词**：世界空间实时歌词，屏幕两侧交替浮现、逐字点亮，跟着视角走不挡准星。字号 / 高度 / 左右位置 / 离镜头距离 / 已唱·未唱·翻译三色 / 发光强度全部可调，有翻译时副行小字跟随；自动跳过「词：xxx 曲：xxx」这类制作信息行。默认开箱即用，放歌自动出现。
+2. **会员账号直接放会员曲**：用你自己账号的权限取流。面板底部实时显示登录态（已登录 · 黑胶VIP / 非会员 / 登录态已失效），会员曲能不能放一眼看清，不会「点了没反应」。
 
-3. **联机一起听**：全房间装同版本即可用。房主放歌 → 全房间同步播放（进度 / 暂停 / 切歌）；队友在自己面板点歌 → 进房主的「♪ 一起听」队列（显示歌名+谁点的），房主点「批准」即播，放完自动接播下一首。
+3. **歌单与收藏同步**：登录后同步你在客户端里的「我喜欢的音乐」和自建/收藏歌单，面板里直接翻歌单点播，不用每次重新搜。同步失败会在状态行说明原因，不静默失败。
 
-4. **谁点的歌用谁的会员**：点歌人先用自己的账号取播放直链随点歌发给房主，房主批准时直接播这条直链——房主没有会员也能放客机点的 VIP 曲；免费曲谁点都能放；两边都没权限的付费曲会明确提示原因，不装死。
+4. **3D 悬浮歌词**：世界空间实时歌词，屏幕两侧交替浮现、逐字点亮，跟着视角走不挡准星。字号 / 高度 / 左右位置 / 离镜头距离 / 已唱·未唱·翻译三色 / 发光强度全部可调，有翻译时副行小字跟随；自动跳过「词：xxx 曲：xxx」这类制作信息行。默认开箱即用，放歌自动出现。
 
-5. **游戏内扫码登录**：面板里直接扫码（QQ 音乐 App / 手机 QQ 均可，微信登录的 QQ 音乐账号也支持），手机确认即完成，不用抓包不用复制 Cookie。网易云同样支持扫码。扫不出来还可以「从剪贴板导入」Cookie 兜底。
+5. **联机一起听**：全房间装同版本即可用。房主放歌 → 全房间同步播放（进度 / 暂停 / 切歌）；队友在自己面板点歌 → 进房主的「♪ 一起听」队列（显示歌名+谁点的），房主点「批准」即播，放完自动接播下一首。
 
-6. **收藏与记忆**：♡ 收藏常听的歌随时重播；搜索框带最近搜过的词，点标签直接再搜。
+6. **谁点的歌用谁的会员**：点歌人先用自己的账号取播放直链随点歌发给房主，房主批准时直接播这条直链——房主没有会员也能放客机点的 VIP 曲；免费曲谁点都能放；两边都没权限的付费曲会明确提示原因，不装死。
 
-7. **面板随心调**：标题栏拖动、Ctrl+滚轮缩放（0.7–1.5）、4 款主题配色（丝绒玫瑰 / 午夜石墨 / 极光海 / 曜石红）、折叠成迷你条、位置自动记忆。
+7. **游戏内扫码登录**：面板里直接扫码（QQ 音乐 App / 手机 QQ 均可，微信登录的 QQ 音乐账号也支持），手机确认即完成，不用抓包不用复制 Cookie。网易云同样支持扫码。扫不出来还可以「从剪贴板导入」Cookie 兜底。
+
+8. **面板随心调**：标题栏拖动、Ctrl+滚轮缩放（0.7–1.5）、4 款主题配色（丝绒玫瑰 / 午夜石墨 / 极光海 / 曜石红）、折叠成迷你条、位置自动记忆。
 
 ---
 
 ## 截图展示
 
-**主面板**（`F1` 打开）——搜索、结果列表、左侧歌词调节与平台切换，实拍画面：
+**主面板**（`F1` 打开）——搜索、结果列表、左侧歌词调节与平台切换：
 
-![主面板](docs/images/panel-search-netease.jpg)
+![主面板](https://raw.githubusercontent.com/pht5740/PEAK-Music-Player/main/docs/images/panel-search-netease.jpg)
 
-中英文歌都能搜（网易云）：
+中英文歌都能搜：
 
-![英文搜索](docs/images/panel-search-en.jpg)
+![英文搜索](https://raw.githubusercontent.com/pht5740/PEAK-Music-Player/main/docs/images/panel-search-en.jpg)
 
 切到 QQ音乐标签，搜索只查 QQ 音乐：
 
-![QQ音乐搜索](docs/images/panel-search-qq.jpg)
+![QQ音乐搜索](https://raw.githubusercontent.com/pht5740/PEAK-Music-Player/main/docs/images/panel-search-qq.jpg)
 
 **扫码登录卡片**——支持 QQ 音乐 App 扫码 / 手机 QQ 扫码两种方式：
 
-![扫码登录](docs/images/shot-login.png)
+![扫码登录](https://raw.githubusercontent.com/pht5740/PEAK-Music-Player/main/docs/images/shot-login.png)
 
 **联机一起听队列**——队友点的歌在这里，点「批准」即播：
 
-![一起听队列](docs/images/shot-queue.png)
+![一起听队列](https://raw.githubusercontent.com/pht5740/PEAK-Music-Player/main/docs/images/shot-queue.png)
 
 ---
 
 ## 安装
 
-**mod 管理器（推荐）**：在 Thunderstore / mod 管理器里搜 `PeakMusic` 安装即可，前置 BepInExPack_PEAK 会自动带上。
+**mod 管理器（推荐）**：搜 `PeakMusic` 安装即可，前置 BepInExPack_PEAK 会自动带上。
 
 **手动安装**：
 
@@ -86,8 +101,10 @@
 ## 数据文件
 
 ```
-%APPDATA%\PeakMusic\cookie.txt        网易云登录态（MUSIC_U 等 3 项）
-%APPDATA%\PeakMusic\qq_cookie.txt     QQ音乐登录态（musickey 等）
+%APPDATA%\PeakMusic\cookie.txt        网易云登录态（MUSIC_U / __csrf 等，完整保留）
+%APPDATA%\PeakMusic\netease_device.txt 网易云设备号（os=pc / appver / deviceId，删掉会重新生成）
+%APPDATA%\PeakMusic\qq_cookie.txt     QQ音乐登录态（qm_keyst / musickey 等）
+%APPDATA%\PeakMusic\qq_guid.txt       QQ音乐取流设备号（删掉会重新生成）
 %APPDATA%\PeakMusic\favorites.txt     收藏列表
 %APPDATA%\PeakMusic\history.txt       最近搜索词
 BepInEx\config\com.peakmusic.probe.cfg  全部配置
@@ -121,9 +138,25 @@ BepInEx\config\com.peakmusic.probe.cfg  全部配置
 
 ---
 
+## 实验功能：跟随本机播放器（默认关闭）
+
+游戏外已经在客户端里放着歌，不想再在面板里搜一遍 —— 这个功能可以把「本机正在放什么」搬进游戏，屏幕顶部浮出一条歌词卡。
+
+**默认关闭**（`peak.music.ui.cfg` 里 `Follow.AutoStart = false`）。原因是各家客户端的进度上报差异很大：
+
+| 平台 | 情况 |
+|---|---|
+| QQ 音乐 | 有系统媒体时间轴，最准，推荐 |
+| 酷狗 | 系统媒体只给歌名和状态、**不给进度**，进度靠推算（别拖进度条） |
+| 网易云 | 新版客户端不上报系统媒体控制，**暂不支持** |
+
+想试就把 `Follow.AutoStart` 改成 `true`，进游戏后在客户端放歌即可；`Follow.Hotkey`（默认 `F8`）切换 3D 歌词 / 顶部卡片，`Follow.LyricOffsetMs` 可手动微调偏移（一般不用动）。
+
+---
+
 ## 工作原理（给在意安全性的玩家）
 
-- **代码完全开源**：登录、取流、播放的每一行代码都可以在本仓库审查，没有混淆、没有闭源组件
+- **[开源透明](https://github.com/pht5740/PEAK-Music-Player)**：登录、取流、播放的每一行代码都可以在 GitHub 仓库审查，没有混淆、没有闭源组件
 - **登录态只存本地**：扫码走的是网易云 / QQ音乐官方登录授权；拿到的 Cookie 只写进你本机的 `%APPDATA%\PeakMusic\` 文本文件，不经过任何第三方服务器
 - **播放直连官方音源**：音频从网易云 / QQ音乐的官方 CDN 直接拉取，mod 不代理、不抓取、不存储音频文件
 - **一起听只在房间内通信**：队列和播放同步走游戏联机通道（Photon），只同步歌名/曲号/进度这类必要信息；点歌人取的播放直链只发给同房间的房主
@@ -139,22 +172,19 @@ BepInEx\config\com.peakmusic.probe.cfg  全部配置
 
 ## 常见问题
 
-- **提示 -110 / 无权限**：看提示区分——「还没登录」→ 扫码登录再试；「已登录但没有这首歌的权限」→ 那首是会员/付费曲，换一首或用有权限的账号点
+- **网易云有会员，却提示没会员 / 只放 30 秒**：先看面板底部账号行的状态——
+  - 「网易云已登录 · 黑胶VIP」→ 服务器已认出会员，会员曲能正常取 320k；若个别歌仍失败，是那首无版权 / 有地区限制
+  - 「网易云已登录 · 非会员」→ 这个账号确实没会员（或会员已过期），会员曲只能试听
+  - 「网易云登录态已失效」→ cookie 过期，面板里退出后重新扫码
+  - 「网易云未登录」→ 扫码登录
+- **QQ 音乐提示取不到直链 / -110**：提示会直接说清是哪一类：
+  - 「QQ音乐未登录」→ 面板里扫码登录再点
+  - 「没认出登录态」→ 面板里退出登录，重新扫一次（App 扫码不行就换「手机 QQ 扫码」）
+  - 「该账号下没有这首歌的播放权限」→ 服务器明确拒绝：这首要么无版权，要么需要更高等级会员
+- **歌单同步失败**：面板状态行会显示接口返回码。常见是登录态过期（重新扫码）或该账号没有对应歌单权限。
 - **一起听对面没声音**：确认两边装的是**同版本** PeakMusic（启动日志第一行版本号一致）、且在同一房间
 - **歌词撞键失效**：`[歌词] Hotkey` 和面板键写成同一个键会自动失效，改开一个就行
 - **改了设置没反应**：改 cfg 文件要重启游戏
-
----
-
-## 开发
-
-```powershell
-git clone https://github.com/pht5740/PEAK-Music-Player.git
-cd PEAK-Music-Player
-dotnet build -c Release   # 需要 .NET SDK 8，编译后自动部署到游戏 plugins 目录
-```
-
-工程结构：`PeakMusic.Core`（纯 C# 协议层：搜索/取流/登录/歌词）→ `PeakMusic`（BepInEx 插件：面板/播放器/3D 歌词）→ `PeakMusic.Sandbox`（协议层命令行测试）。构建细节见 `notes.md`。
 
 ---
 
