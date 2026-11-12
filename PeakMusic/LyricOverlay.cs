@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using PeakMusic.Core;
 using PeakMusic.Core.Netease;
@@ -7,7 +7,8 @@ using UnityEngine;
 namespace PeakMusic
 {
     /// <summary>
-    /// 实时歌词宿主：世界空间 3D 歌词（TextMeshPro SDF，移植自 PeakDangoMusic）。
+    /// 实时歌词宿主：世界空间 3D 歌词（TextMeshPro SDF）。
+    /// 歌词渲染部分移植自第三方开源项目（GPL-3.0），来源与许可见仓库根目录 NOTICE.md。
     ///
     /// <para><b>只保留这一套 3D 歌词</b>：歌词不是画在屏幕上，而是在相机左右两侧、
     /// 按 FOV 算出的散布角、距离相机一定距离处放置真正的 3D 文字网格，正对相机、
@@ -27,7 +28,7 @@ namespace PeakMusic
         private SongInfo _song;
         private string _lrcRaw = "";
 
-        // 世界空间 3D 歌词（移植自 PeakDangoMusic）。没有主相机（菜单/加载）时它自然不画。
+        // 世界空间 3D 歌词（移植部分见 NOTICE.md）。没有主相机（菜单/加载）时它自然不画。
         private WorldLyricRenderer _world;
 
         public static LyricOverlay Instance { get; private set; }
@@ -71,6 +72,17 @@ namespace PeakMusic
             // 喂给世界空间渲染器（3D 歌词）
             if (_world != null)
                 _world.SetLyrics(song != null ? song.Key : "", _lines);
+
+            // 推给 Folia 的 Stage API（开关在 [歌词] SendToFolia）
+            try
+            {
+                var pl = MusicPlayer.Active;
+                FoliaStageBridge.PushLyrics(song, _lrcRaw, translated,
+                    pl != null ? pl.Time : 0f,
+                    pl != null ? pl.Length : 0f,
+                    pl == null || !pl.IsPlaying);
+            }
+            catch { }
 
             if (Plugin.Log != null)
                 Plugin.Log.LogInfo(Tag + " 歌词就绪：" + _lines.Count + " 行" +

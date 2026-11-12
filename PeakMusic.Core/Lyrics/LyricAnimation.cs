@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Globalization;
 
 namespace PeakMusic.Core.Lyrics
@@ -32,13 +32,17 @@ namespace PeakMusic.Core.Lyrics
         public readonly double YOffset;
         public readonly double Rotation;
 
-        public LyricGlyphFrame(double alpha, double scale, double x, double y, double rotation)
+        /// <summary>弹出进度：字刚出现时 1，约 160ms 内回落到 0。给「逐字光晕脉冲」用。</summary>
+        public readonly double Pop;
+
+        public LyricGlyphFrame(double alpha, double scale, double x, double y, double rotation, double pop = 0)
         {
             Alpha = alpha;
             Scale = scale;
             XOffset = x;
             YOffset = y;
             Rotation = rotation;
+            Pop = pop;
         }
     }
 
@@ -121,7 +125,7 @@ namespace PeakMusic.Core.Lyrics
             if ((uint)graphemeIndex >= (uint)Graphemes.Length || !_visible[graphemeIndex])
                 return new LyricGlyphFrame(0, 1, 0, 0, 0);
 
-            double alpha, scale = 1, x = 0, y = 0, rotation = 0;
+            double alpha, scale = 1, x = 0, y = 0, rotation = 0, pop = 0;
 
             if (wordPop && _wordStarts != null)
             {
@@ -130,6 +134,7 @@ namespace PeakMusic.Core.Lyrics
                 alpha = Clamp(ageMs * 3 / 160, 0, 1);
                 double back = Clamp(1 - ageMs / 160, 0, 1);
                 scale = 1 + .55 * back * back;
+                pop = back * back;                 // 同一条回弹曲线，单独给光晕用
             }
             else
             {
@@ -152,7 +157,7 @@ namespace PeakMusic.Core.Lyrics
                 scale *= 1 + Noise(graphemeIndex, bucket, 4, _seed) * .12 * amount;
             }
 
-            return new LyricGlyphFrame(alpha, scale, x, y, rotation);
+            return new LyricGlyphFrame(alpha, scale, x, y, rotation, pop);
         }
 
         /// <summary>逐字模式：把整句时长按字数均分，每个字有自己的开始时间。</summary>

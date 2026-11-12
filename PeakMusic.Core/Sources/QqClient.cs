@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Net;
 using System.Net.Http;
@@ -78,6 +78,9 @@ namespace PeakMusic.Core.Sources
         /// <summary>匿名音质前缀：M500 = 128k mp3（可用），M800 = 320k mp3（登录后），C400 = m4a（Unity 不能解）。</summary>
         private const string Mp3Prefix = "M500";
         private const string Mp3PrefixHi = "M800";
+
+        /// <summary>F000 = FLAC 无损（会员专属）。文件名必须是 .flac，写成 .mp3 拿不到。</summary>
+        private const string FlacPrefix = "F000";
 
         private const string Referer = "https://y.qq.com/portal/player.html";
 
@@ -997,6 +1000,37 @@ namespace PeakMusic.Core.Sources
 
         // ────────────────────────────── 取流 ──────────────────────────────
 
+        /// <summary>
+        /// 按音质档取流。quality: 0 自动 / 1 标准 / 2 较高 / 3 极高(320k) / 4 无损 / 5 Hi-Res。
+        /// <para>QQ 的音质靠 filename 前缀区分：M500=128k mp3、M800=320k mp3、F000=FLAC。
+        /// F000 只有会员号才有 purl；拿不到就按顺序往下退，不会变成没声音。</para>
+        /// </summary>
+        public async Task<SongUrlResult> GetSongUrlAsync(SongInfo song, int quality,
+                                                   CancellationToken ct = default(CancellationToken))
+        {
+            string mid0 = song != null
+                ? (string.IsNullOrEmpty(song.SourceId) ? song.Id.ToString() : song.SourceId)
+                : "";
+            if (string.IsNullOrEmpty(mid0))
+                return new SongUrlResult { Code = -1, Message = "缺少 QQ songmid" };
+
+            if (quality >= 4 && HasLogin)
+            {
+                SongUrlResult fl = await GetSongUrlOnceAsync(song, mid0, FlacPrefix, ct, ".flac")
+                    .ConfigureAwait(false);
+                if (fl.Ok && fl.IsFlac)
+                {
+                    if (PluginHooks.LogInfo != null)
+                        PluginHooks.LogInfo("QQ 取流 " + fl.Spec + "（无损档成功）");
+                    return fl;
+                }
+                if (PluginHooks.LogInfo != null)
+                    PluginHooks.LogInfo("QQ F000 无损无权限（code=" + fl.Code + "），回退 mp3");
+            }
+
+            return await GetSongUrlAsync(song, ct).ConfigureAwait(false);
+        }
+
         public async Task<SongUrlResult> GetSongUrlAsync(SongInfo song,
                                                    CancellationToken ct = default(CancellationToken))
         {
@@ -1028,7 +1062,8 @@ namespace PeakMusic.Core.Sources
             return r;
         }
 
-        private Task<SongUrlResult> GetSongUrlOnceAsync(SongInfo song, string mid, string prefix, CancellationToken ct)
+        private Task<SongUrlResult> GetSongUrlOnceAsync(SongInfo song, string mid, string prefix,
+                                                       CancellationToken ct, string ext = ".mp3")
         {
             string uin = Uin;
 
@@ -1041,7 +1076,7 @@ namespace PeakMusic.Core.Sources
                     "\"req_0\":{\"module\":\"vkey.GetVkeyServer\",\"method\":\"CgiGetVkey\"," +
                     "\"param\":{\"guid\":\"" + guid + "\"," +
                     "\"songmid\":[\"" + mid + "\"],\"songtype\":[0]," +
-                    "\"filename\":[\"" + prefix + mid + ".mp3\"]," +
+                    "\"filename\":[\"" + prefix + mid + ext + "\"]," +
                     "\"uin\":\"" + uin + "\",\"loginflag\":1,\"platform\":\"20\"}}}";
 
                 // r44：手动带 Cookie 头（见 _cookielessHttp 注释），别再走 Mono 的容器

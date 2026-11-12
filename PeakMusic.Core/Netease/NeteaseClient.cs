@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Net;
 using System.Net.Http;
@@ -534,14 +534,75 @@ namespace PeakMusic.Core.Netease
             return r;
         }
 
+        /// <summary>
+        /// 按用户设置取「能拿到的最好一档」。
+        /// <para>关键取舍：**先拿 320k 当保底，再考虑升无损**。原因是高音质档在非会员号上
+        /// 不一定报错——它可能回一条 level=standard 的 128k 直链且 code=200，直接采信就
+        /// 会让「开了无损反而更差」。所以只有确认拿到的确实比 320k 好（FLAC 或码率更高）
+        /// 才采用它。</para>
+        /// quality: 0 自动 / 1 标准 / 2 较高 / 3 极高 / 4 无损 / 5 Hi-Res
+        /// </summary>
+        public async Task<SongUrlResult> GetBestUrlAsync(long songId, int quality,
+            CancellationToken ct = default(CancellationToken))
+        {
+            // 1) 基准档：320k MP3，匿名也基本都能拿到
+            SongUrlResult baseR = await GetSongUrlOnceAsync(songId, "exhigh", ct).ConfigureAwait(false);
+
+            string hi = null;
+            if (quality == 5) hi = "hires";
+            else if (quality >= 4) hi = "lossless";
+            else if (quality == 3) return baseR;      // 极高 = 320k，就是基准档
+
+            if (quality == 2)
+            {
+                SongUrlResult h = await GetSongUrlOnceAsync(songId, "higher", ct).ConfigureAwait(false);
+                return h.Ok ? h : baseR;
+            }
+            if (quality == 1)
+            {
+                SongUrlResult st = await GetSongUrlOnceAsync(songId, "standard", ct).ConfigureAwait(false);
+                return st.Ok ? st : baseR;
+            }
+
+            if (hi != null)
+            {
+                SongUrlResult r = await GetSongUrlOnceAsync(songId, hi, ct).ConfigureAwait(false);
+                // Hi-Res 拿不到就退一级试无损，再不行才回 320k
+                if (!r.Ok && quality == 5)
+                    r = await GetSongUrlOnceAsync(songId, "lossless", ct).ConfigureAwait(false);
+
+                bool better = r.Ok && (r.IsFlac || (baseR.Ok && r.Br > baseR.Br + 32000));
+                if (better)
+                {
+                    if (PluginHooks.LogInfo != null)
+                        PluginHooks.LogInfo("网易云取流 " + r.Spec + "（无损档成功）");
+                    return r;
+                }
+
+                if (r.Ok && baseR.Ok && !r.IsFlac && r.Br <= baseR.Br + 32000)
+                {
+                    if (PluginHooks.LogInfo != null)
+                        PluginHooks.LogInfo("无损档只给了 " + r.Spec + "，已回退 320k（会员/版权限制）");
+                }
+            }
+
+            if (baseR.Ok) return baseR;
+            return await GetSongUrlOnceAsync(songId, "standard", ct).ConfigureAwait(false);
+        }
+
         private async Task<SongUrlResult> GetSongUrlOnceAsync(long songId, string level,
             CancellationToken ct = default(CancellationToken))
         {
+            // 无损/Hi-Res 必须把 encodeType 也切成 flac，否则接口就算有版权也只回 mp3。
+            bool wantFlac = string.Equals(level, "lossless", StringComparison.OrdinalIgnoreCase)
+                         || string.Equals(level, "hires", StringComparison.OrdinalIgnoreCase)
+                         || string.Equals(level, "jymaster", StringComparison.OrdinalIgnoreCase);
+
             var form = new Dictionary<string, string>
             {
                 { "ids", "[" + songId + "]" },
                 { "level", level },
-                { "encodeType", "mp3" },
+                { "encodeType", wantFlac ? "flac" : "mp3" },
             };
 
             var root = await CallAsync(true, "/api/song/enhance/player/url/v1", form).ConfigureAwait(false);
@@ -562,6 +623,12 @@ namespace PeakMusic.Core.Netease
             r.Level = MiniJson.Str(first, "level", "");
             r.Message = MiniJson.Str(first, "message");
             r.HasFreeTrial = MiniJson.Dict(first, "freeTrialInfo") != null;
+
+            string typ = MiniJson.Str(first, "type", "");
+            if (!string.IsNullOrEmpty(typ)) r.Format = typ.ToLowerInvariant();
+            else if (!string.IsNullOrEmpty(r.Url) &&
+                     r.Url.IndexOf(".flac", StringComparison.OrdinalIgnoreCase) >= 0) r.Format = "flac";
+            else if (!string.IsNullOrEmpty(r.Url)) r.Format = "mp3";
 
             // 取不到直链时附一小段原始响应（百来字，远离 BepInEx 单行 2000 字上限），排查用
             if (string.IsNullOrEmpty(r.Url))

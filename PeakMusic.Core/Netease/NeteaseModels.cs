@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using PeakMusic.Core.Sources;
 
@@ -68,6 +68,31 @@ namespace PeakMusic.Core.Netease
         public int Fee;
         public string Level = "";
         public bool HasFreeTrial;
+
+        /// <summary>实际拿到的音频格式：mp3 / flac（从 URL 后缀判定，接口不一定回 type）。</summary>
+        public string Format = "";
+
+        /// <summary>这条直链是不是 FLAC。是的话必须走本地解码，Unity 的网络音频接口解不了。</summary>
+        public bool IsFlac
+        {
+            get
+            {
+                if (string.Equals(Format, "flac", StringComparison.OrdinalIgnoreCase)) return true;
+                return !string.IsNullOrEmpty(Url) &&
+                       Url.IndexOf(".flac", StringComparison.OrdinalIgnoreCase) >= 0;
+            }
+        }
+
+        /// <summary>给日志/面板看的一行规格说明。</summary>
+        public string Spec
+        {
+            get
+            {
+                if (!Ok) return "无直链";
+                string f = IsFlac ? "FLAC" : "MP3";
+                return f + " " + (Br > 0 ? (Br / 1000) + "kbps" : "?") + " " + Level;
+            }
+        }
         public string Message;
 
         public bool Ok

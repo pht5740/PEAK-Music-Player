@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections;
 using System.Collections.Generic;
 using System.Diagnostics;
@@ -463,7 +463,7 @@ namespace PeakMusic
                 try
                 {
                     // IMGUI 默认字体没有中文字形，会显示方块。必须用系统字体。
-                    var font = Font.CreateDynamicFontFromOSFont("Microsoft YaHei", 14);
+                    var font = Font.CreateDynamicFontFromOSFont(new[] { "Microsoft YaHei", "Malgun Gothic", "Tahoma" }, 14);
                     _style = new GUIStyle(GUI.skin.label) { fontSize = 14, richText = false };
                     if (font != null) _style.font = font;
                 }

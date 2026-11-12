@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Text;
 using BepInEx.Logging;
@@ -34,6 +34,11 @@ namespace PeakMusic
         private const byte EvQueueAdd = 94;       // 客机 → 房主：点歌进队列
         private const byte EvQueueState = 95;     // 房主 → 全员：队列更新（含批准/移除）
 
+        // 房间成员把自己「装了模组 + 版本」写进 Photon 玩家属性，别人读得到。
+        // 之前完全没做身份探测：客机一律把点歌塞进房主队列，房主没装模组时永远没人批准，
+        // 表现就是面板一直挂着「等房主批准」，一个人装模组反而放不了歌。
+        private const string ModPropKey = "pmv";
+
         private static ManualLogSource Log { get { return Plugin.Log; } }
 
         /// <summary>日志统一加毫秒时间戳 —— 联机排查没有时间轴寸步难行（r34）。</summary>
@@ -45,6 +50,8 @@ namespace PeakMusic
         private Photon.Realtime.LoadBalancingClient _registeredClient;
         private bool _wasInRoom;
         private int _evSeen;                 // 事件心跳：证明回调链路活着
+        private string _presenceRoom = "";   // 已经在哪个房间登记过模组身份
+        private DateTime _presenceTryAt = DateTime.MinValue;
         private float _evWindowStart;
 
         // 一起听总开关（面板里房主可切）。默认开，装了这个 mod 就参与。
@@ -55,6 +62,84 @@ namespace PeakMusic
 
         /// <summary>是否在联机房间里（Photon 已连接且进了房）。</summary>
         public bool InRoom { get { return PhotonNetwork.InRoom && PhotonNetwork.IsConnectedAndReady; } }
+
+        /// <summary>把自己「装了模组」写进 Photon 玩家属性（每个房间写一次，失败 2 秒后重试）。</summary>
+        private void PublishPresence()
+        {
+            if (!InRoom) { _presenceRoom = ""; return; }
+
+            var room = PhotonNetwork.CurrentRoom;
+            string name = room != null ? room.Name : "?";
+            if (_presenceRoom == name) return;
+            if (DateTime.UtcNow < _presenceTryAt) return;
+
+            try
+            {
+                var props = new Hashtable();
+                props[ModPropKey] = Plugin.Version ?? "1";
+                if (PhotonNetwork.LocalPlayer.SetCustomProperties(props))
+                {
+                    _presenceRoom = name;
+                    Log.LogInfo(Ts() + Tag + " 已登记模组身份：房间 " + name + " 版本 " + Plugin.Version);
+                    return;
+                }
+            }
+            catch (Exception e)
+            {
+                Log.LogWarning(Ts() + Tag + " 登记模组身份失败：" + e.Message);
+            }
+            _presenceTryAt = DateTime.UtcNow.AddSeconds(2);
+        }
+
+        private static bool Modded(Photon.Realtime.Player p)
+        {
+            if (p == null) return false;
+            try
+            {
+                var props = p.CustomProperties;
+                return props != null && props.ContainsKey(ModPropKey) && props[ModPropKey] != null;
+            }
+            catch { return false; }
+        }
+
+        /// <summary>
+        /// 房主是否装了本模组。「一起听」的播放源在房主机器上，
+        /// 房主没装就没人是播放源 —— 客机点歌只会挂在队列里没人批。
+        /// </summary>
+        public bool HostHasMod
+        {
+            get
+            {
+                if (!InRoom) return false;
+                Photon.Realtime.Player host = PhotonNetwork.MasterClient;
+                if (host == null) return false;
+                if (host.IsLocal) return true;
+                return Modded(host);
+            }
+        }
+
+        /// <summary>房间里装了本模组的人数（含自己）。</summary>
+        public int ModdedCount
+        {
+            get
+            {
+                if (!InRoom) return 0;
+                int n = 0;
+                try
+                {
+                    var list = PhotonNetwork.PlayerList;
+                    if (list == null) return 0;
+                    for (int i = 0; i < list.Length; i++)
+                    {
+                        Photon.Realtime.Player p = list[i];
+                        if (p == null) continue;
+                        if (p.IsLocal ? _presenceRoom.Length > 0 : Modded(p)) n++;
+                    }
+                }
+                catch { }
+                return n;
+            }
+        }
 
         /// <summary>房主不在房间时（单人），一起听退化成本地播放，不广播。</summary>
         public bool CanBroadcast { get { return InRoom && IsHost; } }
@@ -168,6 +253,7 @@ namespace PeakMusic
         private void Update()
         {
             EnsureRegistered();
+            PublishPresence();
 
             bool inRoom = InRoom;
             if (inRoom && !_wasInRoom)

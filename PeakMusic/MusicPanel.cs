@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Threading.Tasks;
 using BepInEx.Logging;
@@ -32,8 +32,8 @@ namespace PeakMusic
         private const float CoverSize = 30f; // 列表行里的小封面
         private const float BigCover = 52f;  // 头部正在播放的封面
         private const float NavW = 96f;      // 左侧音源导航宽度
-        private const float ScaleMin = 0.7f;
-        private const float ScaleMax = 1.5f;
+        private const float ScaleMin = 0.85f;
+        private const float ScaleMax = 1.8f;
 
         private static readonly string[] Presets = { "雨爱", "下雨天", "江南", "晴天" };
 
@@ -86,6 +86,18 @@ namespace PeakMusic
         private bool _libDirty = true;              // 收藏/历史有变动，下次进视图重读
         private bool _wasPlaying;                   // 上一帧播放中标记（检测播完切下一首）
         private float _playEndGrace;                // 播完后短暂防抖，别连跳两首
+        private bool _pendingAdvance;               // 播完时还在取地址 → 空下来补切一首
+        private float _lastPlayTime;                // 上一帧的播放位置（秒）
+
+        /// <summary>
+        /// 「这一轮在放的列表」快照。用户从搜索结果 / 收藏 / 歌单点歌时整表拷进来，
+        /// 自动续播只认它 —— 否则面板一切视图（比如点完歌又去搜索），续播就会跑到别的列表里。
+        /// </summary>
+        private readonly List<SongInfo> _autoList = new List<SongInfo>();
+        private int _autoIndex = -1;
+
+        /// <summary>单曲循环（底栏「↻ 单曲」按钮）。每帧从配置同步，改 cfg 也能跟上。</summary>
+        internal bool RepeatOne;
 
         /// <summary>当前选中的音源平台。切平台只换搜索目标，已搜到的列表照旧保留（点谁回谁的源取流）。</summary>
         private Platform _platform = Platform.Netease;
@@ -99,7 +111,13 @@ namespace PeakMusic
         private string _pendingRequester;   // 客机点歌：等取完流一起发给房主的点歌人昵称
         private string _taskError;
         private bool _busy;
-        private bool _queueFallback;   // r41：队列回退房主自取时置位，失败提示要说清「点歌人和房主都没权限」
+        /// <summary>r41：队列回退房主自取时置位，失败提示要说清「点歌人和房主都没权限」。</summary>
+        private bool _queueFallback;
+        /// <summary>队列批准时点歌人给的直链。房主先用自己的账号取流（会员音质更高），
+        /// 取不到才回退到这条 —— r40 的「谁点的用谁会员」保留在回退路径里。</summary>
+        private string _queueUrlFallback = "";
+        /// <summary>这次播放是「房主没装模组」时的本机独奏（只有自己听得到）。</summary>
+        private bool _soloPlay;
 
         // 键盘文本输入
         private Keyboard _textKb;
@@ -116,6 +134,14 @@ namespace PeakMusic
         // 绘制用 GUI.matrix 整体缩放，命中测试用 _lm 反算，两套坐标靠 ComputeLayout 对齐。
         private Vector2 _panelPos;
         private float _scale = 1f;
+
+        /// <summary>
+        /// 分辨率系数：面板逻辑尺寸按 1080p 设计，实际尺寸 = 832 × (屏幕高 / 1080)。
+        /// 目的是「按玩家分辨率适配」——各分辨率下占屏比例一致（约 43% 宽、64% 高），
+        /// 而不是固定放大某一档。以前写死不走这个系数，4K / 2K 屏幕上 832 逻辑像素就是一小块。
+        /// </summary>
+        private float _dpi = 1f;
+        private int _screenH = -1;      // 上一次算系数时用的屏幕高度（用于检测分辨率变化）
         private bool _collapsed;
         private bool _dragging;
         private Vector2 _dragGrab;      // 按下时鼠标相对面板左上角的偏移
@@ -161,10 +187,83 @@ namespace PeakMusic
         private Rect _rGrip, _rClose, _rCollapse, _rZoomIn, _rZoomOut, _rResize;
 
         // 左侧音源导航（照 MuoniumPlayer 的侧栏骨架）
-        private Rect _rNav, _rNavLine, _rLyricPos, _rLyricColor, _rLyricSize, _rLyricHeight, _rLyricEdge, _rLyricDist;
+        private Rect _rNav, _rNavLine, _rLyricPos, _rLyricColor, _rLyricSize, _rLyricHeight, _rLyricEdge, _rLyricDist, _rLyricBright;
+
+        /// <summary>
+        /// 歌词样式选择页是否开着。真正的卡片由 UI 程序集（PeakMusic.UI）画，
+        /// 内核只维护这个开关 + 提供套用入口，这样老面板和新面板都能复用同一套预设。
+        /// </summary>
+        internal bool StylePickerOpen;
+
+        /// <summary>
+        /// UI 程序集当前画的是哪一页：-1 = 没有 UI / 内核自绘，0 首页，1 列表，2 正在播放。
+        /// UI 每帧通过 SetUiPage 回写；内核用它决定哪些命中区还"活着"。
+        /// </summary>
+        internal int UiPage = -1;
+
+        /// <summary>UI 每帧回写当前页（R.Call("SetUiPage", n)）。</summary>
+        internal void SetUiPage(int page) { UiPage = page; }
+
+        /// <summary>当前特效档（0–10）。UI 用 R.G 读它做高亮，所以必须是**字段**不是属性。</summary>
+        internal int FxIndex;
+
+        /// <summary>配色是否跟随样式（UI 用来高亮「跟随样式」那颗 chip）。</summary>
+        internal bool ColorFromStyle = true;
+
+        /// <summary>UI「配色」那一排：只换颜色，动效保持当前样式。</summary>
+        internal void ApplyStyleColor(int i)
+        {
+            try
+            {
+                LyricColors.ApplyColor(i);
+                ColorFromStyle = false;
+                string name = (i >= 0 && i < LyricColors.Presets.Length) ? LyricColors.Presets[i].Name : "?";
+                _status = "歌词配色 → " + name + "（动效保持当前样式）";
+                Log.LogInfo(Tag + " 歌词配色 → " + name);
+            }
+            catch { }
+        }
+
+        /// <summary>回到「配色跟着样式走」。</summary>
+        internal void UseStyleColor()
+        {
+            try
+            {
+                LyricColors.UseStyleColor();
+                ColorFromStyle = true;
+                _status = "配色已交还给样式";
+                Log.LogInfo(Tag + " 配色跟随样式");
+            }
+            catch { }
+        }
+
+        /// <summary>
+        /// UI 点特效格子 → 立刻换。写的是 ConfigEntry.Value（内存值），
+        /// 渲染层下一帧就读到，不用重启；BepInEx 顺手落盘。
+        /// </summary>
+        internal void SetFx(int i)
+        {
+            try
+            {
+                i = Mathf.Clamp(i, 0, 10);
+                if (Plugin.LyricFxMode != null) Plugin.LyricFxMode.Value = i;
+                FxIndex = i;
+                _status = i <= 0 ? "歌词特效已关闭" : "歌词特效 → " + FxLabel(i);
+                Log.LogInfo(Tag + " 歌词特效 → " + i + " " + FxLabel(i));
+            }
+            catch { }
+        }
+
+        private static readonly string[] FxLabels =
+        { "关", "星尘", "花火", "绘光", "时计", "回环", "心象", "脉冲", "波纹", "极光", "流星" };
+
+        private static string FxLabel(int i)
+        {
+            return i >= 0 && i < FxLabels.Length ? FxLabels[i] : i.ToString();
+        }
         private readonly Rect[] _rNavItem = new Rect[Platforms.All.Length];
         private Rect _rList, _rPrev, _rNext, _rPageInfo, _rBar, _rProgress;
-        private Rect _rPause, _rStop, _rVolDown, _rVolUp, _rVolText, _rTime, _rHint;
+        private Rect _rPause, _rStop, _rRepeat, _rVolDown, _rVolUp, _rVolText, _rTime, _rHint;
         private readonly Rect[] _rPreset = new Rect[Presets.Length];
         private Rect _rFavNav;                                  // 导航底部「收藏」入口
         private Rect _rQueueNav;                                // 收藏下方「一起听」入口（点歌队列）
@@ -180,6 +279,9 @@ namespace PeakMusic
             get
             {
                 if (_client == null) _client = new MusicSources();
+                // 每取一次同步档位：这样在模组配置页拖动 QualityLevel 立刻生效，
+                // 不需要重建 MusicSources（重建会把登录态和限流器一起丢掉）。
+                try { _client.QualityLevel = Plugin.QualityLevel != null ? Plugin.QualityLevel.Value : 0; } catch { }
                 return _client;
             }
         }
@@ -187,20 +289,61 @@ namespace PeakMusic
         private void Awake()
         {
             _player = gameObject.AddComponent<MusicPlayer>();
+
+            // 无损挂了要能自动降到 320k，否则用户只会看到「点了没声音」。
+            // 这里必须走 Task —— 取流是网络请求，在主线程同步等会把游戏卡住。
+            MusicPlayer.Mp3FallbackAsync = delegate(SongInfo target)
+            {
+                var src = Client;
+                if (src == null || target == null)
+                    return System.Threading.Tasks.Task.FromResult<string>(null);
+
+                return System.Threading.Tasks.Task.Run(delegate
+                {
+                    int old = src.QualityLevel;
+                    try
+                    {
+                        src.QualityLevel = 3;      // 3 = 极高 320k，保底档
+                        var r = src.GetUrlAsync(target).GetAwaiter().GetResult();
+                        return r != null && r.Ok ? r.Url : null;
+                    }
+                    catch { return (string)null; }
+                    finally { src.QualityLevel = old; }
+                });
+            };
             _covers = gameObject.AddComponent<CoverCache>();
             _themeIdx = Mathf.Clamp(Plugin.Theme.Value, 0, Palettes.Count - 1);
             _pal = Palettes.Get(_themeIdx);
             _platform = Platforms.FromInt(Plugin.SourcePlatform.Value);
 
-            _scale = Mathf.Clamp(Plugin.PanelScale.Value, ScaleMin, ScaleMax);
+            _screenH = Screen.height;
+
+            // 游戏启动那一刻窗口还是 304×201 的加载窗（日志实测）。这个尺寸下算缩放毫无意义，
+            // 更糟的是任何一次写入都会把 PanelScale 存成 0.7，之后大屏幕上永远是缩小版。
+            // 所以先在「假尺寸」阶段用默认缩放，等真正分辨率出来再按 cfg 算。
+            bool tinyAtBoot = _screenH < 480;
+            _dpi = Mathf.Clamp(_screenH / 1080f, 1f, 2.4f);
+            _scale = tinyAtBoot
+                ? Mathf.Clamp(Plugin.PanelScale.Value, ScaleMin, ScaleMax)
+                : Mathf.Clamp(Plugin.PanelScale.Value * _dpi, ScaleMin * _dpi, ScaleMax * _dpi);
+            Log.LogInfo(Tag + " 屏幕 " + Screen.width + "x" + _screenH
+                        + " · 分辨率系数 " + _dpi.ToString("F2")
+                        + " · 面板缩放 " + _scale.ToString("F2")
+                        + "（约 " + Mathf.RoundToInt(PanelW * _scale) + "x" + Mathf.RoundToInt(TotalH * _scale) + " 像素）");
             _collapsed = Plugin.PanelCollapsed.Value;
 
             // 歌词热键和面板热键撞车（比如 PanelKey=F4）时，整个忽略歌词热键：
             // 否则按一次面板键会顺手把歌词关掉，看起来就像"必须按 F4 才有歌词"。
+            // 撞键按「集合有没有交集」判，不能按整串全等：
+            // 例如 PanelKey="F1,F2" + LyricKey="F1"，字符串不相等，但按 F1 会同时开面板又关歌词。
             string lk = NormalizeKeys(Plugin.LyricKey != null ? Plugin.LyricKey.Value : "");
             string pk = NormalizeKeys(PanelKeyCfg);
-            _lyricHotkeyDead = lk.Length == 0 || lk == pk;
-            _lyricHotkeyCollides = lk.Length > 0 && lk == pk;
+            var lkSet = SplitKeys(lk);
+            var pkSet = SplitKeys(pk);
+            bool shared = false;
+            foreach (string one in lkSet) { if (pkSet.Contains(one)) { shared = true; break; } }
+            _lyricHotkeyDead = lkSet.Count == 0 || shared;
+            _lyricHotkeyCollides = lkSet.Count > 0 && shared;
 
             RefreshLibrary();   // 启动时载入收藏与搜索历史
 
@@ -310,6 +453,29 @@ namespace PeakMusic
 
         private void Update()
         {
+            try { FoliaStageBridge.Tick(_player); } catch { }
+            try { FxIndex = Plugin.LyricFxMode != null ? Plugin.LyricFxMode.Value : 0; } catch { }
+            try { RepeatOne = Plugin.RepeatOne != null && Plugin.RepeatOne.Value; } catch { }
+            try { ColorFromStyle = Plugin.LyricColorFromStyle == null || Plugin.LyricColorFromStyle.Value; } catch { }
+            UpdateRest();
+        }
+
+        private void UpdateRest()
+        {
+            // 分辨率很可能在插件启动之后才被游戏改掉（PEAK 先建窗口、再套用户设置），
+            // 所以不能只在 Awake 算一次。这里每帧比对，变了就按新高度重算系数，
+            // 并按「用户当前的相对缩放」还原 —— 换分辨率/改窗口大小不会突然变小或变巨大。
+            if (Screen.height >= 480 && Screen.height != _screenH)
+            {
+                float rel = _dpi > 0.01f ? (_scale / _dpi) : Plugin.PanelScale.Value;
+                _screenH = Screen.height;
+                _dpi = Mathf.Clamp(_screenH / 1080f, 1f, 2.4f);
+                _scale = Mathf.Clamp(rel * _dpi, ScaleMin * _dpi, ScaleMax * _dpi);
+                Log.LogInfo(Tag + " 分辨率变化 → " + Screen.width + "x" + _screenH
+                            + " · 分辨率系数 " + _dpi.ToString("F2")
+                            + " · 面板缩放 " + _scale.ToString("F2"));
+            }
+
             if (PanelKeyDown())
                 Toggle();
 
@@ -466,17 +632,21 @@ namespace PeakMusic
                 Key k;
                 if (Enum.TryParse<Key>(s, true, out k) && k != Key.None)
                 {
-                    try
+                    var kb = Keyboard.current;
+                    if (kb != null)
                     {
-                        var kb = Keyboard.current;
-                        if (kb != null)
+                        // 新输入系统可用：它说了算，**不要**再查旧 Input ——
+                        // 两套都开时同一个键会在同一帧被读两次（面板开了又关）。
+                        try
                         {
                             var c = kb[k];
                             if (c != null && c.wasPressedThisFrame) hit = true;
                         }
+                        catch { }
+                        continue;
                     }
-                    catch { }
-                    continue;
+                    // 新输入系统不可用（游戏只开了旧 Input Manager）：
+                    // 以前这里直接 continue，导致 F1 永远按不出来。落到下面的 KeyCode 分支。
                 }
 
                 KeyCode kc;
@@ -486,6 +656,20 @@ namespace PeakMusic
                 }
             }
             return hit;
+        }
+
+        /// <summary>把归一化后的 "F1,F2" 拆成集合，用于撞键求交集。</summary>
+        private static System.Collections.Generic.HashSet<string> SplitKeys(string normalized)
+        {
+            var set = new System.Collections.Generic.HashSet<string>(StringComparer.Ordinal);
+            if (string.IsNullOrEmpty(normalized)) return set;
+            string[] parts = normalized.Split(new[] { ',' }, StringSplitOptions.RemoveEmptyEntries);
+            for (int i = 0; i < parts.Length; i++)
+            {
+                string one = parts[i].Trim();
+                if (one.Length > 0) set.Add(one);
+            }
+            return set;
         }
 
         /// <summary>把 "f4" / "F4," 这类写法归一成可比较的形式。</summary>
@@ -530,11 +714,13 @@ namespace PeakMusic
 
         private void SaveWindow()
         {
+            // 窗口还没到真实分辨率（加载窗 304×201）时别写：会把缩放/位置存成一堆错值
+            if (Screen.height < 480) return;
             try
             {
                 Plugin.PanelX.Value = _panelPos.x;
                 Plugin.PanelY.Value = _panelPos.y;
-                Plugin.PanelScale.Value = _scale;
+                Plugin.PanelScale.Value = Mathf.Clamp(_scale / (_dpi < 0.01f ? 1f : _dpi), ScaleMin, ScaleMax);
                 Plugin.PanelCollapsed.Value = _collapsed;
                 Plugin.Instance.Config.Save();
             }
@@ -547,7 +733,7 @@ namespace PeakMusic
         private void ZoomBy(float delta)
         {
             float old = _scale;
-            _scale = Mathf.Clamp(_scale + delta, ScaleMin, ScaleMax);
+            _scale = Mathf.Clamp(_scale + delta * _dpi, ScaleMin * _dpi, ScaleMax * _dpi);
             if (Mathf.Abs(old - _scale) < 0.0005f) return;
             ClampWindow();
             SaveWindow();
@@ -1116,7 +1302,7 @@ namespace PeakMusic
                 if (_held)
                 {
                     float d = (_mousePos.x - _resizeGrabPos.x) + (_mousePos.y - _resizeGrabPos.y);
-                    _scale = Mathf.Clamp(_resizeBaseScale + d / 900f, ScaleMin, ScaleMax);
+                    _scale = Mathf.Clamp(_resizeBaseScale + d / 900f * _dpi, ScaleMin * _dpi, ScaleMax * _dpi);
                     ClampWindow();
                 }
                 else
@@ -1186,6 +1372,18 @@ namespace PeakMusic
                 return;
             }
 
+            // ── UI 接管后的「页面闸门」──
+            // 首页(0) 和正在播放(2) 都不画侧栏 / 搜索框 / 列表 / 底栏，只画各自的内容。
+            // 但内核的命中区是按 832×722 固定布局一直在的，不挡住就会点到看不见的控件：
+            // 正在播放页的「下一首」按钮（cy+10，48 高）正好落在 _rList 里，
+            // 点它 = 点了列表第 (y-222)/40 行 —— 实测就是"点下一首却播了第 6 首《枫》，反复点还是它"。
+            // 列表页(1) 全放行；首页/播放页只留标题栏按钮（上面已处理）。
+            if (UiPage == 0 || UiPage >= 2)
+            {
+                _pendingScroll = 0;
+                return;
+            }
+
             // 滚轮翻页：只有鼠标压在结果列表上才响应，免得跟游戏镜头缩放抢
             if (_pendingScroll != 0 && _rList.Contains(_lm))
             {
@@ -1197,6 +1395,10 @@ namespace PeakMusic
 
             if (_player == null) return;
 
+            // 样式选择页开着的时候，这一页的点击归 UI 画的那一层处理；
+            // 这里直接吞掉，否则点样式卡片会穿透到底下的歌曲列表把歌播了。
+            if (StylePickerOpen) return;
+
             if (_rSearch.Contains(_lm)) { StartTyping(); return; }
             if (Hit(_rSearchBtn)) { StartSearch(); return; }
             if (Hit(_rClear)) { _keyword = ""; return; }
@@ -1205,7 +1407,8 @@ namespace PeakMusic
             if (Hit(_rLyricSize)) { CycleLyricSize(); return; }
             if (Hit(_rLyricDist)) { CycleLyricDistance(); return; }
             if (Hit(_rLyricEdge)) { CycleLyricEdge(); return; }
-            if (Hit(_rLyricColor)) { CycleLyricColor(); return; }
+            if (Hit(_rLyricColor)) { StylePickerOpen = !StylePickerOpen; return; }
+            if (Hit(_rLyricBright)) { CycleLyricBright(); return; }
             if (Hit(_rLyricHeight)) { CycleLyricHeight(); return; }
 
             for (int i = 0; i < Platforms.All.Length; i++)
@@ -1275,17 +1478,20 @@ namespace PeakMusic
                             _status = "已批准播放：" + pick.Name;
                             Log.LogInfo(Tag + " 批准点歌：" + pick.Name + " - " + pick.Artists +
                                 (string.IsNullOrEmpty(pickUrl) ? "〔无点歌人直链，房主自取〕" : "〔用点歌人直链〕"));
-                            if (!string.IsNullOrEmpty(pickUrl))
-                                PlaySongWithUrl(pick, pickUrl);
-                            else
-                            {
-                                _queueFallback = true;   // r41：失败提示要说清「点歌人和房主都没权限」
-                                PlaySong(pick);   // 回退：房主账号取流（老行为）
-                            }
+                            // 房主先用「自己」的账号取流：他是会员就能拿 320k，
+                            // 而点歌人可能只是普通账号（128k）—— 之前直接播点歌人直链，
+                            // 结果房主这个会员反而一直在听 128k。
+                            // 取不到（无权限 / 只给试听）再回退到点歌人的直链。
+                            _queueFallback = true;
+                            _queueUrlFallback = pickUrl;
+                            ClearAutoList();
+                            PlaySong(pick);
                         }
                         else
                         {
-                            _status = "等房主批准播放";
+                            _status = sync != null && sync.HostHasMod
+                                ? "等房主批准播放"
+                                : "房主没装模组，队列没人批；直接点搜索结果就能本机播放";
                         }
                         return;
                     }
@@ -1293,13 +1499,22 @@ namespace PeakMusic
                     // 一起听：客机在房间里点歌 = 点歌进房主队列，而不是自己放。
                     // r40：先用「客机自己」的账号取好播放直链，连歌一起发给房主——
                     // 这样 VIP 歌用点歌人自己的会员权限取流，房主没会员也能放。
+                    //
+                    // 但只要房主没装这个模组，队列就没人批准（请求发过去没有接收端），
+                    // 以前会一直卡在「等房主批准」连声音都没有。这种房间改为本机播放。
                     if (sync != null && sync.InRoom && !sync.IsHost)
                     {
-                        string me = PhotonNetwork.NickName;
-                        QueueSong(list[idx], string.IsNullOrEmpty(me) ? "我" : me);
-                        return;
+                        if (sync.HostHasMod)
+                        {
+                            string me = PhotonNetwork.NickName;
+                            QueueSong(list[idx], string.IsNullOrEmpty(me) ? "我" : me);
+                            return;
+                        }
+                        _soloPlay = true;
+                        Log.LogInfo(Tag + " 房主未安装本模组，改为本机播放：" + list[idx].Name +
+                                    "（房间内装模组 " + sync.ModdedCount + " 人）");
                     }
-                    PlaySong(list[idx]);
+                    PlayFromList(list, idx);
                     return;
                 }
             }
@@ -1309,8 +1524,9 @@ namespace PeakMusic
 
             if (Hit(_rPause)) { TogglePause(); return; }
             if (Hit(_rStop)) { StopPlayback(); return; }
-            if (Hit(_rVolDown)) { _player.SetVolume(_player.Volume - 0.1f); return; }
-            if (Hit(_rVolUp)) { _player.SetVolume(_player.Volume + 0.1f); return; }
+            // 步长 0.05：以前 0.1 一档，想调 3%、5% 这种细一点的根本调不到
+            if (Hit(_rVolDown)) { _player.SetVolume(_player.Volume - 0.05f); return; }
+            if (Hit(_rVolUp)) { _player.SetVolume(_player.Volume + 0.05f); return; }
         }
 
         // ───────────────────────────── 翻页 ─────────────────────────────
@@ -1526,8 +1742,43 @@ namespace PeakMusic
             });
         }
 
+        /// <summary>
+        /// 从某个列表的第 index 首开始播，并**把这个列表记成当前播放列表**。
+        /// 自动续播靠它按顺序往下走；离开列表（点队列里的歌等）就清掉，避免串到旧列表。
+        /// </summary>
+        private void PlayFromList(List<SongInfo> list, int index)
+        {
+            _autoList.Clear();
+            if (list != null) _autoList.AddRange(list);
+            _autoIndex = index;
+            if (index < 0 || index >= _autoList.Count) { _autoList.Clear(); _autoIndex = -1; }
+            PlaySong(_autoList.Count > 0 ? _autoList[index] : null);
+        }
+
+        /// <summary>不按列表播（一起听队列 / 房主广播）时调用：清掉旧列表，续播改回当前视图。</summary>
+        private void ClearAutoList()
+        {
+            _autoList.Clear();
+            _autoIndex = -1;
+        }
+
+        /// <summary>底栏「↻ 单曲」按钮。</summary>
+        internal void ToggleRepeatOne()
+        {
+            try
+            {
+                bool v = !(Plugin.RepeatOne != null && Plugin.RepeatOne.Value);
+                if (Plugin.RepeatOne != null) Plugin.RepeatOne.Value = v;
+                RepeatOne = v;
+                _status = v ? "单曲循环：开" : "单曲循环：关";
+                Log.LogInfo(Tag + " 单曲循环 " + (v ? "开" : "关"));
+            }
+            catch { }
+        }
+
         private void PlaySong(SongInfo song)
         {
+            if (song == null) { _status = "没有选中歌曲"; return; }
             if (_busy) { _status = "上一个请求还没回来，等一下"; return; }
             _busy = true;
             _taskKind = 2;
@@ -1609,6 +1860,9 @@ namespace PeakMusic
         {
             if (_player == null) return;
             _player.TogglePause();
+            // 用户主动暂停/继续：不算"播完"，避免被 AutoAdvance 当成结尾自动切歌
+            _wasPlaying = false;
+            _pendingAdvance = false;
             var sync = MusicSync.Instance;
             if (sync == null) return;
             // 切换后不在播 = 处于暂停态（有 clip 才算真暂停，否则是停止）
@@ -1621,6 +1875,8 @@ namespace PeakMusic
         {
             if (_player == null) return;
             _player.Stop();
+            _wasPlaying = false;
+            _pendingAdvance = false;
             var sync = MusicSync.Instance;
             if (sync != null) sync.BroadcastStop();
         }
@@ -1701,12 +1957,27 @@ namespace PeakMusic
             {
                 if (_pendingUrl != null && _pendingUrl.Ok && _player != null)
                 {
-                    _status = "开始播放：" + _pendingSong.Name;
+                    _status = _soloPlay
+                        ? "开始播放：" + _pendingSong.Name + "（房主没装模组，只有你能听到）"
+                        : "开始播放：" + _pendingSong.Name;
                     _player.Play(_pendingSong, _pendingUrl.Url, 0f);
                     StartLyricFetch(_pendingSong);
+                    Log.LogInfo(Tag + " 起播音质：" + (_pendingUrl.Br / 1000) + "kbps · "
+                                + (_pendingUrl.Level ?? "") + " · " + _pendingSong.Name
+                                + (_queueFallback && !string.IsNullOrEmpty(_queueUrlFallback)
+                                    ? "〔房主账号取流，未用点歌人直链〕" : ""));
                     // 房主广播「一起听」：让房间里其他人播同一首
                     var sync = MusicSync.Instance;
                     if (sync != null) sync.BroadcastPlay(_pendingSong, _pendingUrl.Url, 0f);
+                }
+                else if (_queueFallback && !string.IsNullOrEmpty(_queueUrlFallback) && _pendingSong != null)
+                {
+                    // 房主账号取不到（没会员 / 无版权 / 只给试听）→ 用点歌人自己取好的直链。
+                    // 这样「房主没会员也能放客机点的 VIP 歌」这条 r40 的行为没丢。
+                    Log.LogInfo(Tag + " 房主账号取不到（" + ExplainFetchFail(_pendingSong, _pendingUrl)
+                                + "），改用点歌人直链：" + _pendingSong.Name);
+                    PlaySongWithUrl(_pendingSong, _queueUrlFallback);
+                    _queueUrlFallback = "";
                 }
                 else
                 {
@@ -1743,6 +2014,8 @@ namespace PeakMusic
             _taskKind = 0;
             _busy = false;
             _queueFallback = false;
+            _queueUrlFallback = "";
+            _soloPlay = false;
         }
 
         // ───────────────────────────── 自动切歌 ─────────────────────────────
@@ -1756,9 +2029,21 @@ namespace PeakMusic
             MusicPlayer p = _player;
             if (p == null) { _wasPlaying = false; return; }
 
-            // r35：客机不本地自动切歌——接播由房主广播驱动，否则一首放完两边各切各的直接失联
+            // 上次因为「还在取地址」没切成：现在空下来了，立刻补上（否则这首歌永远停在那）
+            if (_pendingAdvance)
+            {
+                if (_busy) return;
+                _pendingAdvance = false;
+                if (RepeatOne && p.Current != null) { PlaySong(p.Current); return; }
+                Log.LogInfo(Tag + " 补接下一首（上次取流未完成）");
+                PlayNextSong();
+                return;
+            }
+
+            // r35：客机不本地自动切歌——接播由房主广播驱动，否则一首放完两边各切各的直接失联。
+            // 房主没装模组时没有广播可等，客机必须自己接播（本机独奏）。
             var sync = MusicSync.Instance;
-            if (sync != null && sync.InRoom && !sync.IsHost)
+            if (sync != null && sync.InRoom && !sync.IsHost && sync.HostHasMod)
             {
                 _wasPlaying = p.IsPlaying;
                 return;
@@ -1767,10 +2052,14 @@ namespace PeakMusic
             bool playing = p.IsPlaying;
             bool hasClip = p.HasClip;
 
-            // 只在"确实在播"时记录标记，暂停/停止不算
+            // 只在"确实在播"时记录标记，暂停/停止不算。
+            // **必须记住这一帧的播放位置**：AudioSource 播到结尾会把 time 归零，
+            // 等 isPlaying 变 false 再去读 p.Time 只能读到 0 → 被判成"手动停止"，
+            // 于是永远不续播（这就是"放完一首就停"的根因）。
             if (playing)
             {
                 _wasPlaying = true;
+                _lastPlayTime = p.Time;
                 _playEndGrace = 0f;
                 return;
             }
@@ -1782,8 +2071,17 @@ namespace PeakMusic
                 return;
             }
 
-            // 从"在播"翻到"停"：判断是不是播到结尾
-            bool reachedEnd = hasClip && p.Length > 1f && p.Time >= p.Length - 1.2f;
+            // 从"在播"翻到"停"：判断是不是播到结尾。
+            // 三个判据任一成立即算播完：当前位置接近末尾 / 上一帧位置接近末尾 / 位置被归零且时长可信。
+            bool reachedEnd = hasClip && p.Length > 1f &&
+                               (p.Time >= p.Length - 1.5f
+                                || _lastPlayTime >= p.Length - 1.5f
+                                || (p.Time < 0.35f && _lastPlayTime >= p.Length * 0.5f));
+
+            // 流式播放时 clip.length 常常是 0（拿不到总长）：只要"本来在播、突然停了"，
+            // 而暂停/停止都会先清 _wasPlaying，那这里就是自然播完。
+            if (!reachedEnd && hasClip && p.Length <= 1f && _lastPlayTime > 3f)
+                reachedEnd = true;
             if (!reachedEnd)
             {
                 // 手动暂停/停止，不自动切
@@ -1797,16 +2095,85 @@ namespace PeakMusic
             // 防抖：一次播完只切一次（流式下 length/time 可能有波动）
             if (_playEndGrace > 0f) return;
             _playEndGrace = 1.0f;
-
+            Log.LogInfo(Tag + " 播放结束（" + _lastPlayTime.ToString("F1") + "s / "
+                        + p.Length.ToString("F1") + "s），自动接下一首");
             PlayNextSong();
         }
 
-        /// <summary>按当前列表顺序播下一首；到最后一首则回到第一首。</summary>
-        private void PlayNextSong()
+        /// <summary>
+        /// 播下一首。顺序：
+        ///   1) 单曲循环开着 → 重播当前这首；
+        ///   2) 房主有「一起听」点歌队列 → 先接队列；
+        ///   3) 否则按当前播放列表（点歌时快照的那一份）往下走，**到末尾就停**。
+        /// </summary>
+        /// <summary>播完自动接下一首：单曲循环在这里生效。</summary>
+        private void PlayNextSong() { NextCore(true); }
+
+        /// <summary>
+        /// 面板「下一首」按钮。**必须真的换歌**：单曲循环只该影响「播完之后」，
+        /// 不该让手动点下一首也重播同一首（之前两者共用一个方法，开着单曲循环点下一首没反应）。
+        /// </summary>
+        internal void PlayNextManual() { NextCore(false); }
+
+        /// <summary>该按哪份列表走：优先点歌时快照的 _autoList（保证严格按列表顺序），否则退回当前视图。</summary>
+        private List<SongInfo> QueueList()
         {
-            // r35：房主优先自动接播「一起听」队列——客机点的歌排上了就该轮到它
+            return _autoList.Count > 0 ? _autoList : ActiveSongs;
+        }
+
+        /// <summary>当前歌在列表里的下标；找不到返回 -1（列表被换过/一起听广播进来的歌）。</summary>
+        private int IndexInQueue(List<SongInfo> list, SongInfo cur)
+        {
+            if (list == null || cur == null) return -1;
+            for (int i = 0; i < list.Count; i++)
+                if (list[i].Key == cur.Key) return i;
+            return -1;
+        }
+
+        /// <summary>面板「上一首」按钮：严格按当前列表往回退，第一首再退就绕到最后一首。</summary>
+        internal void PlayPrevManual()
+        {
+            MusicPlayer p = _player;
+            SongInfo cur = p != null ? p.Current : null;
+            if (cur == null) { _status = "还没有在放的歌"; return; }
+            if (_busy) { _status = "上一个请求还没回来，等一下"; return; }
+
+            List<SongInfo> list = QueueList();
+            if (list.Count == 0) { _status = "列表空，无法切歌"; return; }
+
+            int idx = IndexInQueue(list, cur);
+            if (idx < 0) idx = _autoIndex >= 0 ? _autoIndex : 0;
+
+            int prev = idx - 1;
+            if (prev < 0)
+            {
+                prev = list.Count - 1;
+                _status = "已是第一首，回到最后一首";
+            }
+
+            _autoIndex = prev;
+            Log.LogInfo(Tag + " 手动上一首（" + (prev + 1) + "/" + list.Count + "）："
+                        + list[prev].Name + " - " + list[prev].Artists);
+            PlaySong(list[prev]);
+        }
+
+        private void NextCore(bool auto)
+        {
+            MusicPlayer p = _player;
+            SongInfo cur = p != null ? p.Current : null;
+
+            // ① 单曲循环：只在「自动播完」时原地重放；手动点下一首要往下走
+            if (auto && RepeatOne && cur != null)
+            {
+                Log.LogInfo(Tag + " 单曲循环：重播 " + cur.Name);
+                PlaySong(cur);
+                return;
+            }
+
+            // ② 房主自动接播「一起听」队列——客机点的歌排上了就该轮到它。
+            // 只限「播完自动」：手动点下一首必须按用户眼里那份列表走，不能被队列截胡。
             var sync = MusicSync.Instance;
-            if (sync != null && sync.IsHost && sync.Queue.Count > 0)
+            if (auto && sync != null && sync.IsHost && sync.Queue.Count > 0)
             {
                 SongInfo queued = sync.Queue[0];
                 string queuedUrl = sync.QueueUrlAt(0);   // 点歌人直链（r40）
@@ -1814,31 +2181,61 @@ namespace PeakMusic
                 sync.BroadcastQueueState();
                 Log.LogInfo(Tag + " 自动接播队列：" + queued.Name + " - " + queued.Artists + "（剩余 " + sync.Queue.Count + " 首）" +
                     (string.IsNullOrEmpty(queuedUrl) ? "〔无点歌人直链〕" : "〔用点歌人直链〕"));
-                if (!string.IsNullOrEmpty(queuedUrl))
-                    PlaySongWithUrl(queued, queuedUrl);
-                else
-                {
-                    _queueFallback = true;   // r41
-                    PlaySong(queued);
-                }
+                // 同批准路径：房主先自取（会员音质更高），取不到才用点歌人直链
+                _queueFallback = true;
+                _queueUrlFallback = queuedUrl;
+                ClearAutoList();
+                PlaySong(queued);
                 return;
             }
 
-            List<SongInfo> list = ActiveSongs;
+            // ③ 播放列表：优先用点歌时快照的那一份，没有才退回当前视图
+            List<SongInfo> list = QueueList();
             if (list.Count == 0) { _status = "列表空，无法自动切歌"; return; }
-            if (_busy) { _playEndGrace = 1.5f; return; }   // 还在取地址就稍后重试
-
-            MusicPlayer p = _player;
-            SongInfo cur = p != null ? p.Current : null;
+            if (_busy)
+            {
+                // 还在取地址：记一笔，等空下来由 AutoAdvance 补切，别把这次续播丢掉
+                _playEndGrace = 1.5f;
+                if (auto) _pendingAdvance = true;
+                return;
+            }
             if (cur == null) return;
 
-            int idx = -1;
-            for (int i = 0; i < list.Count; i++)
-                if (list[i].Key == cur.Key) { idx = i; break; }
+            int idx = IndexInQueue(list, cur);
+            if (idx < 0) idx = (_autoIndex >= 0 && _autoIndex < list.Count) ? _autoIndex : -1;
 
-            int next = idx < 0 ? 0 : (idx + 1) % list.Count;
+            int next = idx + 1;
+            if (next >= list.Count)
+            {
+                // 手动点下一首到末尾：绕回第一首（用户明确点了"下一首"，不能什么都不做）
+                if (!auto)
+                {
+                    next = 0;
+                    _status = "已是最后一首，回到第一首";
+                    Log.LogInfo(Tag + " 手动下一首到末尾，回到第一首");
+                }
+                else
+                {
+                    // 自动续播到末尾：停下来，不绕回
+                    _status = "已播到列表末尾（共 " + list.Count + " 首）";
+                    Log.LogInfo(Tag + " 自动续播到末尾，停止（共 " + list.Count + " 首）");
+                    ClearAutoList();
+                    return;
+                }
+            }
+
             SongInfo target = list[next];
-            Log.LogInfo(Tag + " 自动切下一首：" + target.Name + " - " + target.Artists);
+
+            // 保险：算出来的目标如果还是当前这首（列表里查不到当前歌时会发生），再往后挪一首
+            if (target != null && cur != null && target.Key == cur.Key && list.Count > 1)
+            {
+                next = (next + 1) % list.Count;
+                target = list[next];
+            }
+
+            _autoIndex = next;
+            Log.LogInfo(Tag + (auto ? " 自动切下一首（" : " 手动下一首（")
+                        + (next + 1) + "/" + list.Count + "）：" + target.Name + " - " + target.Artists);
             PlaySong(target);
         }
 
@@ -2040,6 +2437,7 @@ namespace PeakMusic
             _rLyricEdge = new Rect(_rNav.x + 6f, _rNav.yMax - 184f, NavW - 12f, 42f);
             _rLyricHeight = new Rect(_rNav.x + 6f, _rNav.yMax - 228f, NavW - 12f, 42f);
             _rLyricColor = new Rect(_rNav.x + 6f, _rNav.yMax - 272f, NavW - 12f, 42f);
+            _rLyricBright = new Rect(_rNav.x + 6f, _rNav.yMax - 316f, NavW - 12f, 42f);
 
             // ── 主区从导航右侧开始 ──
             float px = _rNav.xMax + 28f;
@@ -2193,8 +2591,12 @@ namespace PeakMusic
                 {
                     try
                     {
+                        // 数组就是回退链：Unity 按顺序找字形。原来只有中英日俄的字，
+                        // 韩文（malgun）/ 泰文越南文阿拉伯（tahoma）都会画成方块 ——
+                        // 韩语歌名在面板上也是方块，和 3D 歌词是同一个病。
                         _font = Font.CreateDynamicFontFromOSFont(
-                            new[] { "Microsoft YaHei UI", "Microsoft YaHei", "SimHei", "Segoe UI" }, 16);
+                            new[] { "Microsoft YaHei UI", "Microsoft YaHei", "SimHei",
+                                    "Malgun Gothic", "Tahoma", "Segoe UI" }, 16);
                     }
                     catch { }
                 }
@@ -2431,6 +2833,13 @@ namespace PeakMusic
             GUI.Label(new Rect(lh.x + 8f, lh.y + 3f, lh.width - 10f, 16f),
                       "高度 " + (Plugin.LyricY.Value * 100f).ToString("0"), _rowText);
             GUI.Label(new Rect(lh.x + 8f, lh.y + 21f, lh.width - 10f, 16f), "点击调整", _tiny);
+
+            // 亮度：字面颜色倍率，嫌歌词发暗就往大调
+            Rect lb = _rLyricBright;
+            if (_mouseValid && lb.Contains(_lm)) GUI.Box(lb, GUIContent.none, _sRowHi);
+            GUI.Label(new Rect(lb.x + 8f, lb.y + 3f, lb.width - 10f, 16f),
+                      "亮度 " + Plugin.LyricBrightness.Value.ToString("0.0"), _rowText);
+            GUI.Label(new Rect(lb.x + 8f, lb.y + 21f, lb.width - 10f, 16f), "点击调整", _tiny);
         }
 
         /// <summary>导航栏的「收藏 / 历史」入口：选中态高亮，右侧显示数量。</summary>
@@ -2456,6 +2865,24 @@ namespace PeakMusic
             else
                 GUI.Label(new Rect(r.x + 10f, r.y + 21f, r.width - 40f, 14f),
                           on ? "当前视图" : "点击查看", _tiny);
+        }
+
+        /// <summary>
+        /// 歌词亮度循环：1.0 → 1.3 → 1.6 → 1.9。乘在字面颜色上，超过 1 会往白里推，
+        /// 所以越亮越"抓眼"，不是简单加透明度。
+        /// </summary>
+        private void CycleLyricBright()
+        {
+            float[] steps = { 1.0f, 1.3f, 1.6f, 1.9f };
+            float cur = Plugin.LyricBrightness.Value;
+            float next = steps[0];
+            for (int i = 0; i < steps.Length; i++)
+            {
+                if (steps[i] > cur + 0.01f) { next = steps[i]; break; }
+            }
+            Plugin.LyricBrightness.Value = next;
+            _status = "歌词亮度 → " + next.ToString("0.0") + "（下一句生效；也可以改 cfg 的 [歌词] Brightness）";
+            Log.LogInfo(Tag + " 歌词亮度 → " + next.ToString("0.0"));
         }
 
         /// <summary>歌词高度循环：40 → 44 → 50 → 56 → 62（屏幕百分比，越大越靠下）。</summary>
@@ -2520,11 +2947,42 @@ namespace PeakMusic
 
 
         /// <summary>歌词配色循环。写的是 cfg 里的三个十六进制项，歌词层下一帧就换色，不用重启。</summary>
+        /// <summary>UI 侧栏点「样式」时也会走到这里（和点侧栏按钮等价）。</summary>
+        internal void OpenStylePicker()
+        {
+            StylePickerOpen = true;
+        }
+
+        /// <summary>
+        /// UI 选择页点某张卡 → 套用第 i 套样式。
+        /// 颜色 / 未唱常显度 / 光晕 / 亮度 / 字距 / 字重 / 运动方式 / 入场退场 是一次性写进去的，
+        /// 所以点完立刻是「另一套东西」，而不是只换个色。
+        /// </summary>
+        internal void ApplyStyleIndex(int i)
+        {
+            if (i < 0 || i >= LyricColors.Presets.Length) return;
+            LyricColors.Apply(i);
+            _status = "歌词样式 → " + LyricColors.Presets[i].Name;
+            Log.LogInfo(Tag + " 歌词样式 → " + LyricColors.Presets[i].Name);
+        }
+
+        /// <summary>当前样式序号（选择页高亮用；颜色被手改过时回落到配置里记的下标）。</summary>
+        internal int StyleIndex
+        {
+            get
+            {
+                int i = LyricColors.MatchPreset();
+                if (i < 0 && Plugin.LyricColorPreset != null) i = Plugin.LyricColorPreset.Value;
+                return i;
+            }
+        }
+
         private void CycleLyricColor()
         {
             int idx = LyricColors.Cycle();
-            _status = "歌词颜色 → " + LyricColors.Presets[idx].Name + "（想自定义就改 cfg 的 [歌词] ColorLit）";
-            Log.LogInfo(Tag + " 歌词配色 → " + LyricColors.Presets[idx].Name);
+            _status = "歌词样式 → " + LyricColors.Presets[idx].Name
+                    + "（颜色/光晕/亮度/抖动/入场退场 一起换；想微调改 cfg 的 [歌词]）";
+            Log.LogInfo(Tag + " 歌词样式 → " + LyricColors.Presets[idx].Name);
         }
 
         private static Color BrandColor(Platform p)
@@ -2762,9 +3220,12 @@ namespace PeakMusic
             var sync = MusicSync.Instance;
             if (sync != null && sync.InRoom)
             {
-                syncInfo = sync.IsHost
-                    ? "　·　一起听：房主 · 听众 " + sync.ListenerCount + " 人"
-                    : "　·　一起听：跟随房主";
+                if (sync.IsHost)
+                    syncInfo = "　·　一起听：房主 · 房间内装模组 " + sync.ModdedCount + " 人";
+                else if (sync.HostHasMod)
+                    syncInfo = "　·　一起听：跟随房主 · 房间内装模组 " + sync.ModdedCount + " 人";
+                else
+                    syncInfo = "　·　一起听：房主未装模组 · 本机播放（只你听到）";
                 if (sync.Queue.Count > 0) syncInfo += " · 队列 " + sync.Queue.Count + " 首";
             }
             GUI.Label(_rHint, _loginLine + "　·　" + PanelKeyName + " 面板　·　歌词自动显示" +

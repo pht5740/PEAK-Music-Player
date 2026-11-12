@@ -1,4 +1,4 @@
-<Project Sdk="Microsoft.NET.Sdk">
+﻿<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
     <TargetFramework>net472</TargetFramework>
@@ -28,6 +28,9 @@
 
   <ItemGroup>
     <!-- BepInEx 5 本体，绝不复制到输出目录 -->
+    <!-- 推 Folia Stage API 用到 HttpClient（net472 必须显式引） -->
+    <Reference Include="System.Net.Http" />
+
     <Reference Include="BepInEx">
       <HintPath>$(GameDir)\BepInEx\core\BepInEx.dll</HintPath>
       <Private>false</Private>
@@ -50,6 +53,14 @@
       <HintPath>$(ManagedDir)\UnityEngine.dll</HintPath>
       <Private>false</Private>
     </Reference>
+    <!-- Unity 6 的 UnityEngine.AudioModule 是按 netstandard 2.1 编的，
+         net472 默认带的是 2.0 facade，直接用 AudioClip.Create 会报 CS1705。
+         改成指向游戏自带的 netstandard.dll（2.1）即可，运行时本来用的也是它。 -->
+    <Reference Include="netstandard">
+      <HintPath>$(ManagedDir)\netstandard.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+
     <Reference Include="UnityEngine.CoreModule">
       <HintPath>$(ManagedDir)\UnityEngine.CoreModule.dll</HintPath>
       <Private>false</Private>
@@ -130,20 +141,30 @@
       <HintPath>$(ManagedDir)\PhotonRealtime.dll</HintPath>
       <Private>false</Private>
     </Reference>
+    <!-- 无损解码：FlacBox（纯 C#，NuGet flacbox 1.0.1 / lib/net35）。
+         必须 Private=true —— 游戏目录里没有这个库，得随插件一起发。 -->
+    <Reference Include="FlacBox">
+      <HintPath>lib\FlacBox.dll</HintPath>
+      <Private>true</Private>
+    </Reference>
+
     <Reference Include="Photon3Unity3D">
       <HintPath>$(ManagedDir)\Photon3Unity3D.dll</HintPath>
       <Private>false</Private>
     </Reference>
   </ItemGroup>
 
-  <!-- 编译完自动部署到插件目录。Core 是独立程序集，必须一起拷，否则 BepInEx 加载时找不到类型。 -->
-  <Target Name="Deploy" AfterTargets="Build" Condition="Exists('$(GameDir)\BepInEx\plugins')">
+  <!-- 编译完自动部署到插件目录（只部署面板本身）。
+       注意：**故意不部署 PeakMusic.Core.dll**。本仓库里的 PeakMusic.Core 源码是旧版，
+       编译出来会缺 media_mid 等字段（会员曲取流会退化），一旦被这段自动部署拷过去，
+       就会把正确的 Core 覆盖掉，而且很难发现。Core 请用发布包里的那一份，别在这里覆盖。 -->
+  <Target Name="Deploy" AfterTargets="Build" Condition="'$(SkipDeploy)' != 'true' and Exists('$(GameDir)\BepInEx\plugins')">
     <ItemGroup>
       <DeployFiles Include="$(TargetPath)" />
-      <DeployFiles Include="$(TargetDir)PeakMusic.Core.dll" Condition="Exists('$(TargetDir)PeakMusic.Core.dll')" />
+      <DeployFiles Include="lib\FlacBox.dll" />
     </ItemGroup>
     <Copy SourceFiles="@(DeployFiles)" DestinationFolder="$(GameDir)\BepInEx\plugins\PeakMusic\" />
-    <Message Text="已部署 → $(GameDir)\BepInEx\plugins\PeakMusic\" Importance="high" />
+    <Message Text="已部署面板 → $(GameDir)\BepInEx\plugins\PeakMusic\（Core 不自动覆盖）" Importance="high" />
   </Target>
 
 </Project>

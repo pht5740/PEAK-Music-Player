@@ -14,7 +14,7 @@ namespace PeakMusic
     public sealed class Plugin : BaseUnityPlugin
     {
         public const string Guid = "com.peakmusic.probe";
-        public const string Version = "1.0.0";
+        public const string Version = "1.4.5";
 
         internal static ManualLogSource Log;
         internal static Plugin Instance;
@@ -25,6 +25,11 @@ namespace PeakMusic
         internal static ConfigEntry<float> SeekSeconds;
         internal static ConfigEntry<float> Volume;
         internal static ConfigEntry<int> TimeoutSeconds;
+        internal static ConfigEntry<int> QualityLevel;
+        internal static ConfigEntry<int> MaxLosslessSeconds;
+        internal static ConfigEntry<bool> RepeatOne;
+        internal static ConfigEntry<bool> LyricColorFromStyle;
+        internal static ConfigEntry<int> LyricWarp;
         internal static ConfigEntry<int> Theme;
 
         /// <summary>当前音源平台序号（对应 <c>Platforms.All</c> 的下标）。</summary>
@@ -50,6 +55,24 @@ namespace PeakMusic
         internal static ConfigEntry<bool> LyricSplit;
         internal static ConfigEntry<bool> LyricGlow;
         internal static ConfigEntry<float> LyricGlowStrength;
+        internal static ConfigEntry<float> LyricBrightness;
+        internal static ConfigEntry<bool> LyricWiggle;
+        internal static ConfigEntry<int> LyricWiggleFps;
+        internal static ConfigEntry<float> LyricWiggleAmount;
+        internal static ConfigEntry<int> LyricEnterAnim;
+        internal static ConfigEntry<int> LyricExitAnim;
+        internal static ConfigEntry<float> LyricRestAlpha;
+        internal static ConfigEntry<int> LyricWeight;
+        internal static ConfigEntry<float> LyricCharSpacing;
+        internal static ConfigEntry<float> LyricSizeScale;
+        internal static ConfigEntry<float> LyricBreath;
+        internal static ConfigEntry<float> LyricDrift;
+        internal static ConfigEntry<string> LyricStyleName;
+        internal static ConfigEntry<int> LyricMotion;
+        internal static ConfigEntry<float> LyricGlowPulse;
+        internal static ConfigEntry<bool> SendToFolia;
+        internal static ConfigEntry<int> LyricLayout;
+        internal static ConfigEntry<int> LyricFxMode;
         internal static ConfigEntry<bool> LyricFilterMeta;
 
         /// <summary>阶段 1 探针（F5–F11）。默认关：它有自己的 AudioSource，会和面板播放器同时出声。</summary>
@@ -67,6 +90,11 @@ namespace PeakMusic
         {
             Instance = this;
             Log = Logger;
+
+            // Core 是下层程序集，拿不到 Logger，用回调把日志接回来。
+            // 取流规格、无损降级原因都要靠这条线才能进 BepInEx 日志。
+            PeakMusic.Core.PluginHooks.LogInfo = delegate(string m) { try { Logger.LogInfo("[取流] " + m); } catch { } };
+            PeakMusic.Core.PluginHooks.LogWarn = delegate(string m) { try { Logger.LogWarning("[取流] " + m); } catch { } };
 
             // 默认走本机 HTTP：internet 到国外测试站只有 27KB/s（实测），8.7MB 要 323 秒，
             // 拿它当闸门素材永远过不了。本机 HTTP 走的是同一套 UnityWebRequest 网络栈，
@@ -91,6 +119,25 @@ namespace PeakMusic
 
             TimeoutSeconds = Config.Bind("探针", "TimeoutSeconds", 0,
                 "UnityWebRequest 超时（秒）。0 = 不限。之前设 25 秒，在 27KB/s 的链路上必然失败，这个坑记着");
+
+            // ── 音质 ──
+            // 0 自动：先拿 320k 保底，能升无损就升；非会员升不上去也不会掉到 128k。
+            // 1–3 是「主动降档」，4/5 需要对应平台会员。
+            QualityLevel = Config.Bind("音质", "QualityLevel", 0,
+                new ConfigDescription("音质档位：0=自动（推荐）1=标准128k 2=较高192k 3=极高320k "
+                                    + "4=无损FLAC 5=Hi-Res。4/5 需要对应平台会员，没有会员会自动退回 320k，"
+                                    + "不会出现「点了没声」。无损要先整曲下载再本地解码，起播会慢几秒。",
+                    new AcceptableValueRange<int>(0, 5)));
+
+            MaxLosslessSeconds = Config.Bind("音质", "MaxLosslessSeconds", 900,
+                new ConfigDescription("无损单曲时长上限（秒）。超过就跳过无损改播 320k —— "
+                                    + "一首 15 分钟的无损在内存里是几百 MB，低配机会直接卡死。0=不限。",
+                    new AcceptableValueRange<int>(0, 3600)));
+
+            // ── 播放 ──
+            RepeatOne = Config.Bind("播放", "RepeatOne", false,
+                "单曲循环：开着时一首播完从头再放，不会切下一首。"
+                + "面板底栏的「↻ 单曲」按钮改的就是这一项，改完立刻生效并自动存盘。");
 
             Theme = Config.Bind("界面", "Theme", 0,
                 new ConfigDescription("面板配色：0=丝绒玫瑰 1=午夜石墨 2=极光海 3=曜石红（面板右上角按钮也能切）",
@@ -184,6 +231,97 @@ namespace PeakMusic
             LyricGlowStrength = Config.Bind("歌词", "GlowStrength", 0.6f,
                 new ConfigDescription("发光强度（0=看不见 1=很强）", new AcceptableValueRange<float>(0f, 1f)));
 
+            LyricBrightness = Config.Bind("歌词", "Brightness", 1.70f,
+                new ConfigDescription("歌词亮度。1=原始颜色，越大越亮（颜色会往白里过渡）。"
+                                    + "默认 1.7 是实测比较抓眼、又不到刺眼的值；"
+                                    + "嫌刺眼往 1.2 调，想更炸可以到 2.0。",
+                    new AcceptableValueRange<float>(0.8f, 2.0f)));
+
+            LyricWiggle = Config.Bind("歌词", "Wiggle", true,
+                "逐字轻微抖动（字会小幅漂浮，原项目默认开）。关掉更稳。");
+
+            LyricWiggleFps = Config.Bind("歌词", "WiggleFps", 8,
+                new ConfigDescription("抖动频率 Hz（4–24）。越大越急，8 接近原项目默认。",
+                    new AcceptableValueRange<int>(4, 24)));
+
+            LyricWiggleAmount = Config.Bind("歌词", "WiggleAmount", 0.8f,
+                new ConfigDescription("抖动幅度（0–2）。0 = 不抖，0.8 接近原项目默认。",
+                    new AcceptableValueRange<float>(0f, 2f)));
+
+            LyricEnterAnim = Config.Bind("歌词", "EnterAnim", 1,
+                new ConfigDescription("入场动画：0=淡入 1=上浮 2=弹入（带回弹）3=侧滑入",
+                    new AcceptableValueRange<int>(0, 3)));
+
+            LyricExitAnim = Config.Bind("歌词", "ExitAnim", 1,
+                new ConfigDescription("退场动画：0=淡出 1=上飘 2=缩小 3=下坠",
+                    new AcceptableValueRange<int>(0, 3)));
+
+            // ── 以下是「样式」的其余维度。面板点一次样式会把这些一起写掉，
+            //    手改任意一项也能立刻看到效果（不需要重启）。 ──
+
+            LyricRestAlpha = Config.Bind("歌词", "RestAlpha", .58f,
+                new ConfigDescription("未唱字的透明度（0.2–1）。越小，未唱部分越隐，逐字浮现的感觉越强；"
+                                    + "越大，整句越完整地摆在画面里。",
+                    new AcceptableValueRange<float>(.2f, 1f)));
+
+            LyricWeight = Config.Bind("歌词", "Weight", 0,
+                new ConfigDescription("字重：0=常规 1=加粗（SDF 加厚，远处更好认）",
+                    new AcceptableValueRange<int>(0, 1)));
+
+            LyricCharSpacing = Config.Bind("歌词", "CharSpacing", 2f,
+                new ConfigDescription("字距。0=紧凑，8~12 会拉出「气声/呼吸」那种疏朗感（中文建议不超过 12）。",
+                    new AcceptableValueRange<float>(-6f, 16f)));
+
+            LyricSizeScale = Config.Bind("歌词", "SizeScale", 1f,
+                new ConfigDescription("字号倍率（相对 [歌词] Size）。每套样式可以略有大小差，形成节奏。",
+                    new AcceptableValueRange<float>(.8f, 1.25f)));
+
+            LyricBreath = Config.Bind("歌词", "Breath", .01f,
+                new ConfigDescription("呼吸幅度（0–0.08）：整句缓慢缩放起伏，像跟着气息走。0=完全不动。",
+                    new AcceptableValueRange<float>(0f, .08f)));
+
+            LyricDrift = Config.Bind("歌词", "Drift", .01f,
+                new ConfigDescription("漂移幅度（0–0.06）：整句沿屏幕横向缓慢游走，别调太大，会飘出画面。",
+                    new AcceptableValueRange<float>(0f, .06f)));
+
+            LyricMotion = Config.Bind("歌词", "Motion", 1,
+                new ConfigDescription("整句运动方式：0=静止 1=呼吸(缩放) 2=漂浮(上下) 3=摇摆(左右+微倾) "
+                                    + "4=心跳(双拍脉冲) 5=潮汐(慢上下+缓倾)。每套样式自带一种，这就是「同样的词、不一样的动」。",
+                    new AcceptableValueRange<int>(0, 5)));
+
+            LyricWarp = Config.Bind("歌词", "Warp", 0,
+                new ConfigDescription("逐字排布（参考开源播放器的文字 PV 样式）：0=直排 1=弧排（时计） "
+                                    + "2=阶梯（云阶） 3=散聚（心象，未唱时散开、唱到归位） 4=斜行（倾诉） 5=波浪。"
+                                    + "只改每个字的位置/角度，不影响逐字点亮。",
+                    new AcceptableValueRange<int>(0, 5)));
+
+            LyricColorFromStyle = Config.Bind("歌词", "ColorFromStyle", true,
+                "样式是否自带配色。true = 点样式卡连颜色一起换；"
+                + "false = 颜色由你在面板「配色」里单独选，点样式卡只换动效（运动/入场退场/字距/抖动）。");
+
+            LyricFxMode = Config.Bind("歌词", "Fx", 0,
+                new ConfigDescription("歌词特效层：0=关 1=星尘 2=花火 3=绘光 4=时计 5=回环 6=心象 7=脉冲 8=波纹 9=极光。"
+                                    + "10=流星。纯程序化粒子，不依赖任何外部渲染器；换句/逐字都会触发。",
+                    new AcceptableValueRange<int>(0, 10)));
+
+            LyricLayout = Config.Bind("歌词", "Layout", 0,
+                new ConfigDescription("歌词排版：0=两侧悬浮（默认，世界空间、随视角转）；"
+                                    + "1=居中滚动（屏幕中央一行一句往上滚，当前句最亮，上一句渐暗上移）。"
+                                    + "居中模式更接近播放器歌词，两侧模式更不挡视野。",
+                    new AcceptableValueRange<int>(0, 1)));
+
+            SendToFolia = Config.Bind("歌词", "SendToFolia", false,
+                "把当前歌词与播放进度推给 Folia 的 Stage API（需要 Folia 已启动、并在它自己的设置里打开 Stage 模式）。"
+                + "打开后 Folia 那边会跟着我们的播放器走；关掉不影响我们自己的歌词。");
+
+            LyricGlowPulse = Config.Bind("歌词", "GlowPulse", .6f,
+                new ConfigDescription("逐字光晕脉冲（0–1.5）：每个字刚唱到时亮度冲高一次再回落。"
+                                    + "0=字只是由暗变亮；1 以上会「闪」得比较明显，接近舞台灯牌那种观感。",
+                    new AcceptableValueRange<float>(0f, 1.5f)));
+
+            LyricStyleName = Config.Bind("歌词", "StyleName", "暖白·常显",
+                "当前样式名（面板「样式」按钮自动维护，只用于显示。手改颜色后这里不会跟着变，属正常）。");
+
             LyricFilterMeta = Config.Bind("歌词", "FilterMeta", true,
                 "跳过歌词里的制作信息行（【本音乐作品已获得正版授权】、词：xxx、曲：xxx、" +
                 "编曲/混音/制作人/出品 这类）。开着更像播放器的歌词，关掉则一字不漏地显示。");
@@ -203,8 +341,9 @@ namespace PeakMusic
                 "面板左上角 Y（拖动后自动记下来）。-1 = 每次打开都居中");
 
             PanelScale = Config.Bind("界面", "PanelScale", 1f,
-                new ConfigDescription("面板缩放（0.7–1.5）。面板角落能拖，Ctrl+滚轮也能调",
-                    new AcceptableValueRange<float>(0.7f, 1.5f)));
+                new ConfigDescription("面板缩放（0.85–1.8）。面板角落能拖，Ctrl+滚轮也能调。"
+                                    + "低于 1 时字号会小到看不清，不建议长期用。",
+                    new AcceptableValueRange<float>(0.85f, 1.8f)));
 
             PanelCollapsed = Config.Bind("界面", "PanelCollapsed", false,
                 "打开时是否折叠成一条标题栏（只留曲名和按钮）");
@@ -232,6 +371,22 @@ namespace PeakMusic
             }
             Config.Bind("内部", "DefaultsV2Migrated", true,
                 "内部标记：2026-11-08 定稿默认歌词配置已同步过一次。别改。");
+
+            // 一次性修正：游戏启动时窗口还是 304×201 的加载窗，插件在这个尺寸下算出的缩放
+            // 会被写回 cfg（实测变成 0.7），之后无论屏幕多大，面板都只有 0.7 倍 —— 字全糊。
+            // 这里把「明显是被压到底」的值刷回 1.0。
+            bool scaleFix = !Config.ContainsKey(new ConfigDefinition("内部", "ScaleFixMigrated"));
+            if (scaleFix && PanelScale.Value < 0.9f) PanelScale.Value = 1f;
+            Config.Bind("内部", "ScaleFixMigrated", true,
+                "内部标记：2026-11-10 修正过被加载窗口写坏的 PanelScale。别改。");
+
+            // 2026-11-11：歌词「样式」系统重做（10 套，每套自带运动方式 / 字距 / 字重 / 呼吸）。
+            // 老 cfg 只有三个颜色键，没有 Motion / RestAlpha 这些新键，直接跑会落在「自定义」上、
+            // 颜色和动画对不上。用一次性标记把默认落回 0 号样式（暖白·常显）。
+            bool styleMigrate = !Config.ContainsKey(new ConfigDefinition("内部", "StylesV2Migrated"));
+            if (styleMigrate) LyricColors.Apply(0);
+            Config.Bind("内部", "StylesV2Migrated", true,
+                "内部标记：2026-11-11 歌词样式系统重做后同步过一次默认样式。别改。");
 
             SourcePlatform.Value = Mathf.Clamp(SourcePlatform.Value, 0, 1);
             LyricSide.Value = Mathf.Clamp(LyricSide.Value, 0, 2);
@@ -272,7 +427,7 @@ namespace PeakMusic
         // BepInEx 5 控制台编码（UnityInjector.ConsoleEncoding.ReadByteBuffer 越界），
         // 且会毒化后续所有插件的日志 → PRZ 加载失败 → Fatal 进不了游戏。
         // 历史根因记录放 CHANGELOG.md / 记忆文件，别再堆回这里。
-        internal const string BuildStamp = "2026-11-09 r44 / v1.0.1（取流修复：Cookie 头手动带）";
+        internal const string BuildStamp = "2026-11-12 / v1.4.5（19 套样式 · 无损换栈 · 下一首修复）";
 
         internal static string SideName(int side)
         {

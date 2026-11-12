@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
@@ -16,6 +16,12 @@ namespace PeakMusic.Core.Sources
     public sealed class MusicSources : IDisposable
     {
         private readonly Throttle _throttle;
+
+        /// <summary>
+        /// 音质档位（由插件在启动时写进来）：0 自动 / 1 标准 / 2 较高 / 3 极高 / 4 无损 / 5 Hi-Res。
+        /// 「自动」= 先拿 320k 保底，能升无损就升（非会员升不上去也不会变差）。
+        /// </summary>
+        public int QualityLevel = 0;
 
         public NeteaseClient Netease { get; private set; }
         public QqClient QQ { get; private set; }
@@ -65,9 +71,9 @@ namespace PeakMusic.Core.Sources
             switch (song.Platform)
             {
                 case Platform.QQ:
-                    return QQ.GetSongUrlAsync(song, ct);
+                    return QQ.GetSongUrlAsync(song, QualityLevel, ct);
                 default:
-                    return Netease.GetSongUrlAsync(song.Id, "exhigh", ct);
+                    return Netease.GetBestUrlAsync(song.Id, QualityLevel, ct);
             }
         }
 

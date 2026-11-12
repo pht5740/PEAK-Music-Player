@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections;
 using BepInEx.Logging;
 using PeakMusic.Core.Netease;
@@ -34,6 +34,40 @@ namespace PeakMusic
         /// </summary>
         public static MusicPlayer Active { get; private set; }
 
+        /// <summary>
+        /// 无损加载失败时，用来重新取一条 320k 直链的回调（由面板挂上，内部跑在线程池）。
+        /// 之所以要这个：无损失败的原因可能是会员过期、CDN 抽风、内存不足，
+        /// 这时候直接报错不给声，用户只会觉得「点了没反应」。降一档能播比什么都没声强。
+        /// </summary>
+        public static Func<SongInfo, System.Threading.Tasks.Task<string>> Mp3FallbackAsync;
+
+        private static bool IsFlacUrl(string url)
+        {
+            return !string.IsNullOrEmpty(url) &&
+                   url.IndexOf(".flac", StringComparison.OrdinalIgnoreCase) >= 0;
+        }
+
+        /// <summary>没走 Unity 解码时，把已经建好的 clip 直接接上播放。</summary>
+        private void AttachAndPlay(AudioClip clip, float startAt, bool stream)
+        {
+            _clip = clip;
+            _src.clip = clip;
+            _src.volume = OutGain(Volume);
+            _src.priority = 0;
+            _src.Play();
+
+            if (startAt > 0.5f && clip.length > 1f)
+            {
+                float target = Mathf.Clamp(startAt, 0f, clip.length - 1f);
+                _src.time = target;
+                Log.LogInfo(Tag + " 从 " + target.ToString("F1") + "s 起播");
+            }
+
+            Log.LogInfo(Tag + " 起播 " + (Current != null ? Current.Name : "?") +
+                        " len=" + clip.length.ToString("F2") + "s freq=" + clip.frequency +
+                        " ch=" + clip.channels + " stream=" + stream);
+        }
+
         public SongInfo Current { get; private set; }
         public bool Loading { get; private set; }
         public string Status = "未播放";
@@ -53,13 +87,23 @@ namespace PeakMusic
             _src.spatialBlend = 0f;             // 2D，不吃位置衰减
             _src.bypassReverbZones = true;
             Volume = Mathf.Clamp01(Plugin.Volume.Value);
-            _src.volume = Volume;
+            _src.volume = OutGain(Volume);
+        }
+
+        /// <summary>
+        /// 音量感知曲线：界面上的百分比是线性的，但人耳对响度是对数的 ——
+        /// 线性的 10% 听起来仍然很响（实测玩家把滑到底还嫌吵）。
+        /// 这里做一次幂曲线：10% → 约 1.6%，50% → 约 29%，100% 不变。
+        /// </summary>
+        private static float OutGain(float v)
+        {
+            return Mathf.Pow(Mathf.Clamp01(v), 1.8f);
         }
 
         public void SetVolume(float v)
         {
             Volume = Mathf.Clamp01(v);
-            if (_src != null) _src.volume = Volume;
+            if (_src != null) _src.volume = OutGain(Volume);
             Plugin.Volume.Value = Volume;
         }
 
@@ -93,6 +137,54 @@ namespace PeakMusic
             }
 
             bool needFull = startAt > 0.5f;
+
+            // ── FLAC：Unity 的网络音频接口解不了，必须自己下下来解 ──
+            if (IsFlacUrl(url))
+            {
+                Status = "无损准备…";
+                FlacLoader.Result fr = null;
+                yield return FlacLoader.Load(
+                    url,
+                    delegate(string msg) { Status = msg; },
+                    delegate(FlacLoader.Result r) { fr = r; });
+
+                if (fr != null && fr.Ok)
+                {
+                    AttachAndPlay(fr.Clip, startAt, false);
+                    Status = "播放中（无损）：" + (song != null ? song.Name : "?");
+                    Loading = false;
+                    _loading = null;
+                    yield break;
+                }
+
+                string why = fr != null ? fr.Error : "未知";
+                Log.LogWarning(Tag + " 无损加载失败：" + why);
+
+                // 降一档重试：320k mp3 几乎总能拿到，至少保证有声音
+                string fb = null;
+                if (Mp3FallbackAsync != null && song != null)
+                {
+                    Status = "无损不可用，回退 320k…";
+                    var task = Mp3FallbackAsync(song);
+                    if (task != null)
+                    {
+                        while (!task.IsCompleted) yield return null;
+                        try { fb = task.Result; } catch (Exception e) { Log.LogWarning(Tag + " 回退取流异常：" + e.Message); }
+                    }
+                }
+
+                if (string.IsNullOrEmpty(fb) || IsFlacUrl(fb))
+                {
+                    Status = "无损加载失败：" + why;
+                    Loading = false;
+                    _loading = null;
+                    yield break;
+                }
+
+                url = fb;
+                Log.LogInfo(Tag + " 已回退 320k：" + ShortenUrl(url));
+            }
+
             var req = UnityWebRequestMultimedia.GetAudioClip(url, AudioType.MPEG);
             var dh = req.downloadHandler as DownloadHandlerAudioClip;
             if (dh != null) dh.streamAudio = !needFull;
@@ -203,7 +295,7 @@ namespace PeakMusic
             _clip = clip;
             _req = req;                 // 流式期间必须活着
             _src.clip = clip;
-            _src.volume = Volume;
+            _src.volume = OutGain(Volume);
             _src.priority = 0;          // 混音里优先，别被游戏音效挤掉
             _src.Play();
 
