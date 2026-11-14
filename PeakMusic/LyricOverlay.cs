@@ -124,7 +124,7 @@ namespace PeakMusic
             "OP", "SP", "Lyrics", "Composed", "Arranged", "Produced", "Mixed", "Mastered",
         };
 
-        private static bool IsMetaLine(string text)
+        internal static bool IsMetaLine(string text)
         {
             if (string.IsNullOrEmpty(text)) return false;
             string t = text.Trim();
@@ -164,15 +164,34 @@ namespace PeakMusic
             }
         }
 
+        // 本地模式（跟着本机网易云/QQ）自己的歌词与歌名，和在线播放的那套分开存
+        private string _extKey = "";
+        private string _extLrc = "";          // 上次喂给 3D 层的 lrc 原文
+        private int _extCount = -1;           // 上次的行数（只在变化时打日志）
+        private float _extProbeAt;            // 同步探针的节流
+        private float _extDriftSince = -1f;   // 3D 层和源不一致的起始时刻
+        private readonly List<LrcLine> _extLines = new List<LrcLine>();
+        private float _ownIdleSince;
+
         private void LateUpdate()
         {
             if (_player == null) _player = MusicPlayer.Active;
+            if (_world == null) return;
+
+            if (TryLocalFollow()) return;
+
+            // 从本地模式切回在线：把我们自己的歌词重新挂回去
+            if (_extKey.Length > 0)
+            {
+                _extKey = "";
+                _extLines.Clear();
+                _world.SetLyrics(_song != null ? _song.Key : "", _lines);
+            }
+
             if (_player == null) return;
 
             // 换歌清空
             if (_player.Current != null && _song != null && _player.Current.Key != _song.Key) Clear();
-
-            if (_world == null) return;
 
             if (!Plugin.LyricEnabled.Value || !_player.HasClip || _lines.Count == 0 || !InWorldScene)
             {
@@ -182,6 +201,91 @@ namespace PeakMusic
 
             float t = _player.Time;
             _world.Tick(_player, Camera.main, t);
+        }
+
+        /// <summary>
+        /// 本地模式：外部播放器（网易云/QQ）在放歌时，用 MusicListsGUI 的进度 + 歌词驱动同一套 3D 歌词。
+        /// 只在「我们自己的播放器没在放、也没有正在取歌」时才接管，避免两套时间轴打架。
+        /// </summary>
+        private bool TryLocalFollow()
+        {
+            var b = LocalBridge.Instance;
+            bool modeOn = b != null && b.Alive && MusicPanel.Active != null && MusicPanel.Active.LocalMode;
+            if (!modeOn) return false;
+
+            bool ours = _player != null && (_player.HasClip || MusicPanel.Active.IsBusy);
+            if (ours) { _ownIdleSince = Time.unscaledTime; return false; }
+            if (Time.unscaledTime - _ownIdleSince < 1.5f) return false;   // 刚停下，缓一拍再接管
+
+            string key = b.SongKey;
+            if (string.IsNullOrEmpty(key)) return false;
+
+            // 重建条件：换歌 **或者歌词内容变了**。
+            // 她的 lyricsLines 是异步补全的 —— 实测同一首《时光背面的我》，
+            // 23:24 的接口只有 34 行（还带 12 行制作署名），23:31 已经是 70 行。
+            // 以前只判断歌名，于是 3D 层永远停在最早那份残缺歌词上：行号整体错位，
+            // 屏幕上就出现"灵动岛和她的面板都对、游戏里却在唱别的句子"。
+            string raw = b.Lrc ?? "";
+            bool songChanged = _extKey != key;
+            if (songChanged || !string.Equals(_extLrc, raw, StringComparison.Ordinal))
+            {
+                _extKey = key;
+                _extLrc = raw;
+                _extLines.Clear();
+                FillLines(_extLines, raw);
+                _world.SetLyrics(key, _extLines);
+
+                if (songChanged || _extLines.Count != _extCount)
+                {
+                    _extCount = _extLines.Count;
+                    Plugin.Log.LogInfo(Tag + " 本地模式歌词：" + b.Title + " - " + b.Artist
+                                       + " · " + _extLines.Count + " 行 · 端口 " + b.Port
+                                       + (songChanged ? "" : "（内容更新）"));
+                }
+            }
+
+            // 同步探针：3D 层实际画的那句 vs 按进度算出的那句。
+            // 只在真的不一致时打一行（3 秒节流），下次出问题一眼能定位是"时间错"还是"歌词错"。
+            // 自愈：3D 层画的那句和「按进度应显示的那句」不一致超过 2 秒，
+            // 就用最新歌词把整层重建一次。这样即使中间出现任何脏状态（旧列表、残留句、
+            // 她那边中途换了一版歌词），也会在两秒内自动归位，不用重启游戏。
+            string srcNow = b.LineTextAt(b.PositionMsNow);
+            if (!string.IsNullOrEmpty(srcNow)
+                && !string.Equals(srcNow, WorldLyricRenderer.LastLineText, StringComparison.Ordinal))
+            {
+                if (_extDriftSince < 0f) _extDriftSince = Time.unscaledTime;
+                else if (Time.unscaledTime - _extDriftSince > 2f)
+                {
+                    _extDriftSince = -1f;
+                    _extLines.Clear();
+                    FillLines(_extLines, raw);
+                    _world.SetLyrics(key, _extLines);
+                    _extCount = _extLines.Count;
+                    Plugin.Log.LogWarning(Tag + " 本地歌词漂移 2s，已按最新歌词重建（"
+                                          + _extLines.Count + " 行）· 期望「" + srcNow + "」");
+                }
+            }
+            else _extDriftSince = -1f;
+
+            if (Time.unscaledTime >= _extProbeAt)
+            {
+                _extProbeAt = Time.unscaledTime + 3f;
+                double pms = b.PositionMsNow;
+                string src = b.LineTextAt(pms);
+                string shown = WorldLyricRenderer.LastLineText;
+                if (!string.IsNullOrEmpty(src) && !string.Equals(src, shown, StringComparison.Ordinal))
+                    Plugin.Log.LogWarning(Tag + " 本地歌词不同步：3D「" + shown + "」/ 源「" + src
+                                          + "」 pos=" + (pms / 1000.0).ToString("F1") + "s");
+            }
+
+            if (!Plugin.LyricEnabled.Value || _extLines.Count == 0 || !InWorldScene)
+            {
+                _world.Hide();
+                return true;
+            }
+
+            _world.Tick(key, Camera.main, (float)(b.PositionMsNow / 1000.0));
+            return true;
         }
     }
 }

@@ -14,7 +14,7 @@ namespace PeakMusic
     public sealed class Plugin : BaseUnityPlugin
     {
         public const string Guid = "com.peakmusic.probe";
-        public const string Version = "1.4.5";
+        public const string Version = "1.4.6";
 
         internal static ManualLogSource Log;
         internal static Plugin Instance;
@@ -30,6 +30,7 @@ namespace PeakMusic
         internal static ConfigEntry<bool> RepeatOne;
         internal static ConfigEntry<bool> LyricColorFromStyle;
         internal static ConfigEntry<int> LyricWarp;
+        internal static ConfigEntry<bool> LyricOcclusion;
         internal static ConfigEntry<int> Theme;
 
         /// <summary>当前音源平台序号（对应 <c>Platforms.All</c> 的下标）。</summary>
@@ -84,6 +85,7 @@ namespace PeakMusic
         internal static ConfigEntry<float> PanelX;
         internal static ConfigEntry<float> PanelY;
         internal static ConfigEntry<float> PanelScale;
+        internal static ConfigEntry<bool> IslandEnabled;
         internal static ConfigEntry<bool> PanelCollapsed;
 
         private void Awake()
@@ -164,7 +166,7 @@ namespace PeakMusic
             LyricSize = Config.Bind("歌词", "Size", 84,
                 new ConfigDescription("字号 = 每个字在屏幕上的高度（像素，按 1080p 记；2K/4K 会自动同比例放大）。" +
                     "40–80 是舒服区间，长句会按屏宽自动收一点",
-                    new AcceptableValueRange<int>(16, 140)));
+                    new AcceptableValueRange<int>(16, 200)));
 
             LyricDistance = Config.Bind("歌词", "Distance", 12f,
                 new ConfigDescription("文字平面离镜头多远（格）。越小越贴脸、透视感越强；越大越远越平。",
@@ -295,6 +297,10 @@ namespace PeakMusic
                                     + "只改每个字的位置/角度，不影响逐字点亮。",
                     new AcceptableValueRange<int>(0, 5)));
 
+            LyricOcclusion = Config.Bind("歌词", "Occlusion", true,
+                "贴墙自动拉近。开着时歌词投到相机与地形之间（爬墙/面壁不会被山体挡住），"
+                + "屏幕字号保持不变；关掉则永远固定在 Distance 处、会被地形遮挡。");
+
             LyricColorFromStyle = Config.Bind("歌词", "ColorFromStyle", true,
                 "样式是否自带配色。true = 点样式卡连颜色一起换；"
                 + "false = 颜色由你在面板「配色」里单独选，点样式卡只换动效（运动/入场退场/字距/抖动）。");
@@ -339,6 +345,10 @@ namespace PeakMusic
 
             PanelY = Config.Bind("界面", "PanelY", -1f,
                 "面板左上角 Y（拖动后自动记下来）。-1 = 每次打开都居中");
+
+            IslandEnabled = Config.Bind("界面", "Island", true,
+                "顶部灵动岛（歌名/歌词/FPS/延迟那条）。默认开；嫌它挡住画面可以在面板「首页 → 界面设置」里关掉，"
+                + "或直接改这里。关掉不影响播放和 3D 歌词。");
 
             PanelScale = Config.Bind("界面", "PanelScale", 1f,
                 new ConfigDescription("面板缩放（0.85–1.8）。面板角落能拖，Ctrl+滚轮也能调。"
@@ -405,6 +415,7 @@ namespace PeakMusic
             root.AddComponent<MusicSync>();       // 「一起听」联机同步（先于面板，面板 Start 要订它的事件）
             root.AddComponent<MusicPanel>();      // 面板 + 播放器（MusicPanel.Awake 里挂 MusicPlayer）
             root.AddComponent<LyricOverlay>();    // 漂浮歌词
+            root.AddComponent<LocalBridge>();     // 本地模式：读 MusicListsGUI 的只读接口
 
             Log.LogInfo("[PeakMusic] ===== 构建 " + BuildStamp + " =====");
             Log.LogInfo("[PeakMusic] 面板已挂载：F1 / F2 开关，输入歌名 → 搜索 → 点一行播放。");
@@ -427,7 +438,7 @@ namespace PeakMusic
         // BepInEx 5 控制台编码（UnityInjector.ConsoleEncoding.ReadByteBuffer 越界），
         // 且会毒化后续所有插件的日志 → PRZ 加载失败 → Fatal 进不了游戏。
         // 历史根因记录放 CHANGELOG.md / 记忆文件，别再堆回这里。
-        internal const string BuildStamp = "2026-11-12 / v1.4.5（19 套样式 · 无损换栈 · 下一首修复）";
+        internal const string BuildStamp = "2026-11-14 / v1.4.6（本地模式 · 逐字光效 · 灵动岛）";
 
         internal static string SideName(int side)
         {

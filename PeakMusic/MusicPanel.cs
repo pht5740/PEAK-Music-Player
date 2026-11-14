@@ -195,6 +195,35 @@ namespace PeakMusic
         /// </summary>
         internal bool StylePickerOpen;
 
+        /// <summary>本地模式：歌词跟随本机网易云/QQ（数据来自 MusicListsGUI），不接管播放。</summary>
+        internal bool LocalMode;
+
+        /// <summary>是否正在取流/解无损。本地模式要靠它避开"刚点歌、还没出声"的空档。</summary>
+        internal bool IsBusy { get { return _busy; } }
+
+        /// <summary>顶部灵动岛是否显示（UI 读它决定画不画）。</summary>
+        internal bool IslandOn;
+
+        // ── 灵动岛要显示的内容：内核每帧算好，UI 只读字段 ──
+        internal bool IslandShow;                 // 有没有内容可画
+        internal bool IslandLocal;                // true = 数据来自本地模式（本机网易云/QQ）
+        internal string IslandTitle = "";
+        internal string IslandArtist = "";
+        internal string IslandLyric = "";
+        private float _islandPreviewUntil;        // 刚打开开关又没在放歌 → 预览几秒
+
+        /// <summary>首页「界面设置」里的灵动岛开关。</summary>
+        internal void ToggleIsland()
+        {
+            bool v = !(Plugin.IslandEnabled != null && Plugin.IslandEnabled.Value);
+            if (Plugin.IslandEnabled != null) Plugin.IslandEnabled.Value = v;
+            IslandOn = v;
+            // 没在放歌时也要能看见"确实打开了"，否则用户会以为开关是坏的
+            if (v) _islandPreviewUntil = UnityEngine.Time.unscaledTime + 4f;
+            _status = "灵动岛：" + (v ? "开" : "关");
+            Log.LogInfo(Tag + " 灵动岛 " + (v ? "开" : "关"));
+        }
+
         /// <summary>
         /// UI 程序集当前画的是哪一页：-1 = 没有 UI / 内核自绘，0 首页，1 列表，2 正在播放。
         /// UI 每帧通过 SetUiPage 回写；内核用它决定哪些命中区还"活着"。
@@ -203,6 +232,31 @@ namespace PeakMusic
 
         /// <summary>UI 每帧回写当前页（R.Call("SetUiPage", n)）。</summary>
         internal void SetUiPage(int page) { UiPage = page; }
+
+        /// <summary>首页「本地模式」卡片：开/关歌词跟随（不接管播放，也不广播给房间）。</summary>
+        internal void ToggleLocalMode()
+        {
+            LocalMode = !LocalMode;
+            var b = LocalBridge.Instance;
+            if (!LocalMode)
+            {
+                _status = "本地模式：已关闭";
+                Log.LogInfo(Tag + " 本地模式 关");
+                return;
+            }
+
+            if (b == null || !b.Alive)
+            {
+                _status = "本地模式已开，但没检测到 MusicListsGUI（127.0.0.1:8765–8775）";
+                Log.LogInfo(Tag + " 本地模式 开，未发现 MusicListsGUI");
+            }
+            else
+            {
+                _status = "本地模式：跟随 " + b.Title + " - " + b.Artist;
+                Log.LogInfo(Tag + " 本地模式 开：" + b.Title + " - " + b.Artist
+                            + "（端口 " + b.Port + "，歌词 " + (string.IsNullOrEmpty(b.Lrc) ? "无" : "有") + "）");
+            }
+        }
 
         /// <summary>当前特效档（0–10）。UI 用 R.G 读它做高亮，所以必须是**字段**不是属性。</summary>
         internal int FxIndex;
@@ -286,8 +340,12 @@ namespace PeakMusic
             }
         }
 
+        /// <summary>当前面板实例（歌词层要读 LocalMode）。</summary>
+        internal static MusicPanel Active;
+
         private void Awake()
         {
+            Active = this;
             _player = gameObject.AddComponent<MusicPlayer>();
 
             // 无损挂了要能自动降到 320k，否则用户只会看到「点了没声音」。
@@ -456,6 +514,7 @@ namespace PeakMusic
             try { FoliaStageBridge.Tick(_player); } catch { }
             try { FxIndex = Plugin.LyricFxMode != null ? Plugin.LyricFxMode.Value : 0; } catch { }
             try { RepeatOne = Plugin.RepeatOne != null && Plugin.RepeatOne.Value; } catch { }
+            try { IslandOn = Plugin.IslandEnabled == null || Plugin.IslandEnabled.Value; } catch { }
             try { ColorFromStyle = Plugin.LyricColorFromStyle == null || Plugin.LyricColorFromStyle.Value; } catch { }
             UpdateRest();
         }
@@ -495,6 +554,9 @@ namespace PeakMusic
             PollLogin();
 
             AutoAdvance();   // 一首播完自动接下一首（面板关着也要能切）
+
+            SamplePerf();
+            UpdateIsland();          // 面板关着也要算：岛是独立于面板的
 
             if (!_open) return;
 
@@ -2018,6 +2080,91 @@ namespace PeakMusic
             _soloPlay = false;
         }
 
+        // ───────────────────────────── 灵动岛数据 ─────────────────────────────
+
+        /// <summary>
+        /// 决定灵动岛显示什么。三条来源按优先级：
+        ///   1) 我们自己在放歌 → 用我们的歌名 + 逐行歌词；
+        ///   2) 本地模式（跟着本机网易云/QQ）→ 用桥里的歌名 + 它给出的当前行；
+        ///   3) 都没有 → 不显示（刚打开开关时给 4 秒预览）。
+        /// 之前岛只认 1)，所以「本地模式 + 开关打开」时它永远不出现，看起来就像开关坏了。
+        /// </summary>
+        private void UpdateIsland()
+        {
+            SongInfo cur = _player != null ? _player.Current : null;
+            if (cur != null && _player.HasClip)
+            {
+                IslandShow = true;
+                IslandLocal = false;
+                IslandTitle = cur.Name;
+                IslandArtist = cur.Artists;
+                IslandLyric = "";
+                return;
+            }
+
+            var b = LocalBridge.Instance;
+            if (LocalMode && b != null && b.Alive && !string.IsNullOrEmpty(b.Title))
+            {
+                IslandShow = true;
+                IslandLocal = true;
+                IslandTitle = b.Title;
+                IslandArtist = b.Artist;
+                IslandLyric = b.LineTextAt(b.PositionMsNow);
+                return;
+            }
+
+            if (IslandOn && UnityEngine.Time.unscaledTime < _islandPreviewUntil)
+            {
+                IslandShow = true;
+                IslandLocal = true;
+                IslandTitle = "灵动岛已开启";
+                IslandArtist = "";
+                IslandLyric = "放歌时会显示歌名、歌词与帧率";
+                return;
+            }
+
+            IslandShow = false;
+            IslandLocal = false;
+            IslandTitle = "";
+            IslandArtist = "";
+            IslandLyric = "";
+        }
+
+        // ───────────────────────────── 性能采样 ─────────────────────────────
+
+        private int _perfFrames;
+        private float _perfTime;
+        private float _perfWorst = 999f;
+        private float _lyricMs;          // 本窗口内歌词层累计耗时（毫秒）
+
+        /// <summary>
+        /// 每 10 秒往日志写一行平均/最低 FPS，只在面板打开时统计 ——
+        /// 优化前后各开一次面板放同一首歌，对比这两行就能看出差别。
+        /// </summary>
+        private void SamplePerf()
+        {
+            if (!_open) { _perfFrames = 0; _perfTime = 0f; _perfWorst = 999f; _lyricMs = 0f; return; }
+
+            float dt = UnityEngine.Time.unscaledDeltaTime;
+            if (dt <= .0001f) return;
+            _perfFrames++;
+            _perfTime += dt;
+            float f = 1f / dt;
+            if (f < _perfWorst) _perfWorst = f;
+            _lyricMs += WorldLyricRenderer.LastTickMs;
+
+            if (_perfTime < 10f) return;
+
+            float avg = _perfFrames / _perfTime;
+            Log.LogInfo(Tag + " [性能] 近 10s 平均 FPS " + avg.ToString("F1")
+                        + " · 最低 " + _perfWorst.ToString("F0")
+                        + " · 歌词层均值 " + (_lyricMs / _perfFrames).ToString("F2") + "ms");
+            _perfFrames = 0;
+            _perfTime = 0f;
+            _perfWorst = 999f;
+            _lyricMs = 0f;
+        }
+
         // ───────────────────────────── 自动切歌 ─────────────────────────────
 
         /// <summary>
@@ -2933,13 +3080,16 @@ namespace PeakMusic
         /// <summary>歌词字号循环：40 → 52 → 62 → 74 → 86 → 40。改 cfg 立即生效，不用重启。</summary>
         private void CycleLyricSize()
         {
-            int[] steps = { 40, 48, 56, 64, 72, 84 };
+            int[] steps = { 40, 48, 56, 64, 72, 84, 96, 110, 128, 150, 180 };
             int cur = Plugin.LyricSize.Value;
             int next = steps[0];
             for (int i = 0; i < steps.Length; i++)
             {
                 if (steps[i] > cur) { next = steps[i]; break; }
             }
+            // 兜底：如果下一档和当前值一样（cfg 范围把它夹住了，或手改成了 140 这种非档位值），
+            // 直接回到最小档 —— 否则会永远"点了没反应"，卡死在最大值上。
+            if (next == cur) next = steps[0];
             Plugin.LyricSize.Value = next;
             _status = "歌词字号 → " + next + "px（也可以直接改 cfg 的 [歌词] Size）";
             Log.LogInfo(Tag + " 歌词字号 → " + next + "px");
@@ -3021,6 +3171,13 @@ namespace PeakMusic
         private void OnGUI()
         {
             if (!_open) return;
+
+            // UI 程序集接管后，它自己会把面板整块画一遍。
+            // 内核这份老面板如果继续画，每个 OnGUI 事件都要多跑 40+ 次 GUI 调用，
+            // 而这些绘制最终被新面板完全盖住 —— 纯浪费。这里直接跳过。
+            // （UiPage 只由 UI 每帧回写；没装 UI 时它保持 -1，老面板照常自绘。）
+            if (UiPage >= 0) return;
+
             ComputeLayout();
             EnsureStyles();
 

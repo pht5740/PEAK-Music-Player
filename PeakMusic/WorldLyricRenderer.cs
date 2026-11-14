@@ -70,7 +70,19 @@ namespace PeakMusic
         /// </summary>
         internal void Tick(MusicPlayer player, Camera camera, float nowSeconds)
         {
-            if (player == null || camera == null || _lines.Count == 0)
+            Tick(player != null && player.Current != null ? player.Current.Key : null, camera, nowSeconds);
+        }
+
+        /// <summary>
+        /// 外部时间轴版本：本地模式（跟着网易云/QQ 客户端）没有 AudioSource，
+        /// 歌名与播放位置都由 LocalBridge 提供，所以这里只认 key 和秒数。
+        /// </summary>
+        /// <summary>上一帧真正画出来的那句（同步探针用，排查"时间对不上"时看它）。</summary>
+        internal static string LastLineText = "";
+
+        internal void Tick(string songKey, Camera camera, float nowSeconds)
+        {
+            if (camera == null || _lines.Count == 0)
             {
                 Hide();
                 return;
@@ -82,9 +94,9 @@ namespace PeakMusic
             }
 
             // 换歌清空
-            if (player.Current != null && _songKey != player.Current.Key)
+            if (!string.IsNullOrEmpty(songKey) && _songKey != songKey)
             {
-                _songKey = player.Current.Key;
+                _songKey = songKey;
                 ClearEntries();
                 _renderKey = "";
             }
@@ -122,6 +134,7 @@ namespace PeakMusic
                 _renderKey = "";
             }
 
+            LastLineText = line.Text;
             string key = _songKey + "/" + index;
             if (key != _renderKey || (_current == null && Time.unscaledTime >= _retryAt))
             {
@@ -134,7 +147,11 @@ namespace PeakMusic
             // 特效层：跟着当前这句走（换句爆点、逐字触发都在它内部判断）
             if (_fx == null && _root != null) _fx = LyricFx.Create(_root.transform);
             if (_fx != null)
-                _fx.Tick(camera, Distance, FxMode, index, positionMs, startMs, endMs, line.Text.Length);
+            {
+                // 特效必须和歌词同一距离：拉近后如果还画在 14m，就会整片留在岩壁后面
+                float fxDist = (_current != null && _current.Dist > .01f) ? _current.Dist : Distance;
+                _fx.Tick(camera, fxDist, FxMode, index, positionMs, startMs, endMs, line.Text.Length);
+            }
 
             Animate(camera, positionMs);
         }
@@ -278,6 +295,14 @@ namespace PeakMusic
             internal int[] CharacterToGrapheme = Array.Empty<int>();
             internal string LineText;
             internal Vector3 Anchor;
+            internal float Dist;              // 平滑后的实际距离（0 = 还没算过）
+            internal Material Mat;            // 主行材质（每句独立实例，能单独开关光晕）
+            internal Material TransMat;       // 副行材质
+            internal bool GlowOn;             // 当前是否开着光晕
+            internal TextMeshPro Glow;        // 只画「唱到的字」的光晕层
+            internal float[] LitT;            // 每个字符的演唱进度 0..1，发光层复用
+            internal float TargetDist;        // 遮挡探测缓存（10Hz 刷新）
+            internal float NextProbe;         // 下次探测时间
             internal Vector3 Viewport;
             internal Quaternion Orientation;
             internal float Born;
@@ -304,12 +329,47 @@ namespace PeakMusic
 
             e.Main = MakeText(e.Root, "Original", text, 36f);
             e.Translation = MakeText(e.Root, "Translation", "", 36f * .72f);
+            // 每句都是 new Material(...)，所以光晕可以按句单独开关
+            e.Mat = e.Main.fontSharedMaterial;
+            e.TransMat = e.Translation.fontSharedMaterial;
+
+            // 主层不要整句光晕：光晕改由下面这层「逐字层」负责，
+            // 否则没唱到的字也会被整句材质光晕糊亮（用户要的是"唱到才发光"）。
+            if (e.Mat != null && e.Mat.HasProperty("_GlowColor"))
+            {
+                Color mc = e.Mat.GetColor("_GlowColor");
+                mc.a = 0f;
+                e.Mat.SetColor("_GlowColor", mc);
+            }
+
+            e.Glow = MakeText(e.Root, "Glow", text, 36f);
+            var gm = e.Glow.fontSharedMaterial;
+            if (gm != null && gm.HasProperty("_GlowColor"))
+            {
+                Color lc = LyricColors.Lit;
+                gm.SetColor("_GlowColor", new Color(lc.r, lc.g, lc.b, 1f));
+                if (gm.HasProperty("_GlowPower")) gm.SetFloat("_GlowPower", .62f);
+                if (gm.HasProperty("_GlowOuter")) gm.SetFloat("_GlowOuter", .33f);
+                if (gm.HasProperty("_GlowInner")) gm.SetFloat("_GlowInner", .08f);
+                if (gm.HasProperty("_GlowOffset")) gm.SetFloat("_GlowOffset", .02f);
+            }
             float ww = WorldWidth(camera);
             e.Main.rectTransform.sizeDelta = new Vector2(ww, 20f);
             e.Translation.rectTransform.sizeDelta = new Vector2(ww, 20f);
             float px = (Plugin.LyricSize != null ? Plugin.LyricSize.Value : 56f) * SizeScale;
             float worldH = CalibrateFont(camera, e.Main, e.Translation, px);
             e.Translation.transform.localPosition = new Vector3(0f, -worldH * .6f - .1f, 0f);
+
+            // 发光层必须和主行同一字号、同一矩形、同一位置，之后每帧直接抄主行顶点
+            e.Glow.fontSize = e.Main.fontSize;
+            e.Glow.characterSpacing = e.Main.characterSpacing;
+            e.Glow.rectTransform.sizeDelta = e.Main.rectTransform.sizeDelta;
+            // CalibrateFont 会按 textBounds 再乘一个缩放系数（main.transform.localScale *= k），
+            // 发光层必须跟着乘同一个系数，否则它比主行大一圈，两层叠在一起就是"两个字重影"。
+            e.Glow.transform.localScale = e.Main.transform.localScale;
+            e.Glow.transform.localPosition = new Vector3(0f, 0f, -.003f);   // 往镜头方向挪 3mm，避免 z-fighting
+            e.Glow.color = Color.white;
+            e.Glow.ForceMeshUpdate();
 
             // 基准色只设一次：主行留白（逐字色写在顶点上），副行用样式里的翻译色
             e.Main.color = Color.white;
@@ -323,6 +383,7 @@ namespace PeakMusic
 
             e.Original = e.Main.textInfo.CopyMeshInfoVertexData();
             e.CharacterToGrapheme = new int[e.Main.textInfo.characterCount];
+            e.LitT = new float[e.Main.textInfo.characterCount];
             for (int i = 0; i < e.CharacterToGrapheme.Length; i++)
             {
                 int source = e.Main.textInfo.characterInfo[i].index;
@@ -331,6 +392,7 @@ namespace PeakMusic
                 e.CharacterToGrapheme[i] = grapheme;
             }
 
+            SetGlow(e, true);          // 新句 = 当前句，马上发光
             _entries.Add(e);
             while (_entries.Count > 4)
             {
@@ -508,7 +570,29 @@ namespace PeakMusic
         {
             if (_current == null) return;
             _current.Retired = Time.unscaledTime;
+            SetGlow(_current, false);   // 发光必须跟着"当前句"走，上一句立刻熄掉
             _current = null;
+        }
+
+        /// <summary>
+        /// 光晕开关。TMP 里 `_GlowColor.a` 就是光晕强度，每句一个材质实例，所以能单独控制。
+        /// 规则：同一时刻只有「当前句」发光；其余句子一律普通白字、不加任何光晕。
+        /// </summary>
+        private static void SetGlow(Entry e, bool on)
+        {
+            if (e == null || e.Glow == null) return;
+            bool want = on && (Plugin.LyricGlow == null || Plugin.LyricGlow.Value);
+            e.GlowOn = want;
+            if (e.Glow.gameObject.activeSelf != want) e.Glow.gameObject.SetActive(want);
+        }
+
+        private static void SetGlowAlpha(Material m, float a)
+        {
+            if (m == null || !m.HasProperty("_GlowColor")) return;
+            Color c = m.GetColor("_GlowColor");
+            if (Mathf.Abs(c.a - a) < .001f) return;
+            c.a = a;
+            m.SetColor("_GlowColor", c);
         }
 
         /// <summary>
@@ -527,6 +611,9 @@ namespace PeakMusic
                 h = h * 31 + WarpMode;
                 h = h * 31 + Mathf.RoundToInt(CharSpacing * 10f);
                 h = h * 31 + Mathf.RoundToInt(SizeScale * 100f);
+                // 字号必须进指纹：否则点了「字号」只写 cfg，屏幕上的这句要等下一句才变，
+                // 用户连点几次都看不到反应，会以为按钮坏了。
+                h = h * 31 + (Plugin.LyricSize != null ? Plugin.LyricSize.Value : 0);
                 h = h * 31 + LyricWeight;
                 h = h * 31 + Mathf.RoundToInt(RestAlpha * 100f);
             }
@@ -534,8 +621,12 @@ namespace PeakMusic
             return h;
         }
 
+        /// <summary>上一帧歌词层（Animate）耗时，毫秒。性能日志用。</summary>
+        internal static float LastTickMs;
+
         private void Animate(Camera camera, double positionMs)
         {
+            long t0 = System.Diagnostics.Stopwatch.GetTimestamp();
             for (int i = _entries.Count - 1; i >= 0; i--)
             {
                 var e = _entries[i];
@@ -614,6 +705,10 @@ namespace PeakMusic
                 float alpha = enterAlpha * exitAlpha;
                 float scale = enterScale * exitScale;
 
+                // 同一时刻只允许一句发光：新句上来后，旧句在淡出期间也必须熄掉光晕
+                bool isCurrent = ReferenceEquals(e, _current);
+                SetGlow(e, isCurrent);      // 只有当前句的发光层可见
+
                 // 居中滚动：每句随时间缓慢上移，新句在中央出现、老句被顶上去并压暗。
                 // 这就是「随播放进度滚动 + 当前句高亮」的最小实现，不需要额外的行槽位管理。
                 if (LyricLayout == 1)
@@ -633,15 +728,61 @@ namespace PeakMusic
                 // 身后（客机反馈「歌词老是出现在身后、跟不上」就是这个）。现在等价于
                 // 固定屏幕位置的 3D 字幕，遇岩壁自动拉近 + 等比缩放，屏幕字号恒定。
                 float dist = Distance;
-                Vector3 dir = camera.ViewportToWorldPoint(e.Viewport) - camera.transform.position;
+                Vector3 origin = camera.transform.position;
+                Vector3 dir = camera.ViewportToWorldPoint(e.Viewport) - origin;
                 if (dir.sqrMagnitude > 0.0001f)
                 {
                     dir.Normalize();
-                    RaycastHit hit;
-                    int mask = LayerMask.GetMask("Map", "Terrain");
-                    if (Physics.Raycast(camera.transform.position, dir, out hit, Distance, mask, QueryTriggerInteraction.Ignore))
-                        dist = Mathf.Max(2.5f, hit.distance - 0.4f);
-                    e.Anchor = camera.transform.position + dir * dist;
+
+                    // ── 贴墙避让：把歌词压到相机与岩壁之间 ──
+                    // 参考做法就一句话「距离拉近、字号拉大」：距离按射线命中点收，
+                    // 再把整体缩放乘 dist/Distance —— 屏幕上的字号不变，只是离眼睛更近。
+                    float target = Distance;
+                    if (Occlusion)
+                    {
+                        // 每句每秒只探 10 次：物理查询不用每帧做，10Hz 足够跟得上走路/攀爬，
+                        // 而 4 句同时在场时这一项从「每帧 8 次查询」降到「每帧不到 1 次」。
+                        if (time >= e.NextProbe)
+                        {
+                            e.NextProbe = time + .10f;
+
+                            // 1) 用 SphereCast 而不是 Raycast：PEAK 的岩壁是碎面，
+                            //    一条细射线经常从两块石头之间穿过去，于是判定"没挡"。
+                            const float probe = .16f;
+                            RaycastHit hit;
+                            if (Physics.SphereCast(origin, probe, dir, out hit, Distance + probe,
+                                    WallMask, QueryTriggerInteraction.Ignore))
+                            {
+                                target = hit.distance - probe - .22f;
+                                if (target < MinDist)
+                                    // 墙就贴在脸上，没有 0.6m 的空间了：继续往近处压，但别越过近裁剪面
+                                    target = Mathf.Max(.32f, hit.distance - .18f);
+                                target = Mathf.Min(target, Distance);
+                            }
+
+                            // 2) 第三人称镜头被地形顶进墙里时，SphereCast 起点已在碰撞体内部，
+                            //    会一路穿到底。用一个极小的球探一下：贴脸就直接压到鼻尖前。
+                            if (Physics.CheckSphere(origin, .30f, WallMask, QueryTriggerInteraction.Ignore))
+                                target = Mathf.Min(target, .85f);
+
+                            e.TargetDist = target;
+                        }
+                        else if (e.TargetDist > .01f)
+                            target = e.TargetDist;      // 两次探测之间用缓存值
+                    }
+
+                    // 3) 平滑：往里收要快（穿墙一帧都难看），往外放慢（爬墙时不会忽远忽近）
+                    if (e.Dist <= .01f) e.Dist = target;
+                    else
+                    {
+                        float k = target < e.Dist ? 20f : 4f;
+                        e.Dist = Mathf.Lerp(e.Dist, target,
+                                            1f - Mathf.Exp(-k * UnityEngine.Time.unscaledDeltaTime));
+                        if (Mathf.Abs(e.Dist - target) < .01f) e.Dist = target;
+                    }
+
+                    dist = e.Dist;
+                    e.Anchor = origin + dir * dist;
                 }
                 e.Root.transform.rotation = Face(e.Anchor, camera);
                 if (Mathf.Abs(roll) > .05f)
@@ -664,6 +805,15 @@ namespace PeakMusic
                 // 逐字双色基准：未唱 = Rest（压暗 + 半透），唱到哪个字往 Lit 过渡。
                 // 参考实现是「没唱到就不画」，这里整句常显、逐字点亮 —— 观感更接近卡拉OK，
                 // 画面里也不会出现半句空白。smoothstep 让过渡不发跳。
+                // 透明度已经接近 0：这一帧不用再算逐字颜色/顶点（TMP 的 UpdateVertexData 最贵）。
+                // 副行的 alpha 仍要跟着走，否则它会停在 1，主行还在淡入时翻译已经实心了。
+                if (alpha <= .012f)
+                {
+                    if (e.Translation.text.Length > 0) e.Translation.alpha = alpha;
+                    if (e.GlowOn) SetGlow(e, false);
+                    continue;
+                }
+
                 float brightNow = Brightness;
                 // 关键：**不能**直接乘 RGB 再 Clamp01。
                 // FFB8D8 × 1.6 = (255,255,255) —— 三个通道一起顶死，粉色就变成纯白；
@@ -695,7 +845,10 @@ namespace PeakMusic
 
                     float litT = (float)frame.Alpha;
                     litT = litT * litT * (3f - 2f * litT);                      // smoothstep
+                    if (e.LitT != null && c < e.LitT.Length) e.LitT[c] = litT;
                     Color rgb = Color.Lerp(restRgb, litRgb, litT);
+                    // 不是当前句 → 普通白字，不参与配色/脉冲
+                    if (!isCurrent) rgb = Color.white;
 
                     // 逐字光晕脉冲：对照「每个字自己冲高一次再回落」的做法 ——
                     // 字刚唱到的那 ~160ms 亮度抬高，之后回常态。这是它那种「字在发光」的关键。
@@ -703,7 +856,7 @@ namespace PeakMusic
                     // 部署的 Core 是另一份构建，加字段会让插件在运行时抛 MissingFieldException。
                     float pulse = GlowPulse;
                     float pop = Mathf.Clamp01(((float)frame.Scale - 1f) / .55f);
-                    if (pulse > .001f && pop > .001f)
+                    if (isCurrent && pulse > .001f && pop > .001f)
                     {
                         float k = 1f + pulse * pop * .8f;
                         rgb = new Color(Mathf.Clamp01(rgb.r * k), Mathf.Clamp01(rgb.g * k),
@@ -768,11 +921,59 @@ namespace PeakMusic
                     }
                 }
                 e.Main.UpdateVertexData(TMP_VertexDataUpdateFlags.Vertices | TMP_VertexDataUpdateFlags.Colors32);
+                UpdateGlowLayer(e, alpha, isCurrent);
 
                 // 注意：原来这里每帧 e.Main.color = Color.white 会把上面写好的逐字色洗掉，
                 // 所以主行/副行的基准色改成出生时设一次，这里只驱动副行透明度。
-                e.Translation.alpha = alpha;
+                if (e.Translation.text.Length > 0) e.Translation.alpha = alpha;
             }
+
+            LastTickMs = (float)((System.Diagnostics.Stopwatch.GetTimestamp() - t0)
+                                 * 1000.0 / System.Diagnostics.Stopwatch.Frequency);
+        }
+
+        /// <summary>
+        /// 逐字发光：直接抄主行的顶点（保证位置/缩放/排布完全一致），
+        /// 只把「已经唱到」的字的 alpha 打开 —— 没唱到的字在这一层是全透明的，
+        /// 所以画面里只有唱过的那几个字带光晕，和参考效果一致。
+        /// </summary>
+        private static void UpdateGlowLayer(Entry e, float alpha, bool on)
+        {
+            if (e == null || e.Glow == null) return;
+            if (!on || alpha <= .012f)
+            {
+                if (e.Glow.gameObject.activeSelf) e.Glow.gameObject.SetActive(false);
+                return;
+            }
+            if (!e.Glow.gameObject.activeSelf) e.Glow.gameObject.SetActive(true);
+
+            var mi = e.Main.textInfo;
+            var gi = e.Glow.textInfo;
+            int n = Mathf.Min(mi.meshInfo.Length, gi.meshInfo.Length);
+            for (int m = 0; m < n; m++)
+            {
+                var src = mi.meshInfo[m].vertices;
+                var dst = gi.meshInfo[m].vertices;
+                Array.Copy(src, dst, Math.Min(src.Length, dst.Length));
+            }
+
+            Color lit = LyricColors.Lit;
+            for (int c = 0; c < gi.characterCount; c++)
+            {
+                var ch = gi.characterInfo[c];
+                if (!ch.isVisible) continue;
+                int mesh = ch.materialReferenceIndex;
+                if (mesh < 0 || mesh >= gi.meshInfo.Length) continue;
+                var cols = gi.meshInfo[mesh].colors32;
+                int vi = ch.vertexIndex;
+                if (vi < 0 || vi + 3 >= cols.Length) continue;
+
+                float k = (e.LitT != null && c < e.LitT.Length) ? e.LitT[c] : 0f;
+                byte a = (byte)Mathf.Clamp(Mathf.RoundToInt(255f * k * alpha), 0, 255);
+                var cc = new Color32((byte)(lit.r * 255), (byte)(lit.g * 255), (byte)(lit.b * 255), a);
+                for (int q = 0; q < 4; q++) cols[vi + q] = cc;
+            }
+            e.Glow.UpdateVertexData(TMP_VertexDataUpdateFlags.Vertices | TMP_VertexDataUpdateFlags.Colors32);
         }
 
         private static string Limit(string text, int elements)
@@ -805,6 +1006,33 @@ namespace PeakMusic
         }
 
         // ───────────────────────────── 参数（对应 cfg，未配则用默认） ─────────────────────────────
+
+        /// <summary>贴墙时最近能压到多少米（再近会切进相机近裁剪面）。</summary>
+        private const float MinDist = .60f;
+
+        private static int _wallMask;
+        private static bool _wallMaskTried;
+
+        /// <summary>挡住歌词的图层。名字被改过时退化成「除角色/水以外的一切」。</summary>
+        private static int WallMask
+        {
+            get
+            {
+                if (!_wallMaskTried)
+                {
+                    _wallMaskTried = true;
+                    // 不猜图层名：PEAK 的岩壁有 Map / Terrain 两套，还可能混着 Default 的碎石。
+                    // 直接「除角色/水/UI/忽略射线以外的一切」——凡是能挡住视线的东西都算障碍。
+                    _wallMask = ~LayerMask.GetMask("Character", "Water", "UI", "Ignore Raycast");
+                }
+                return _wallMask;
+            }
+        }
+
+        private static bool Occlusion
+        {
+            get { try { return Plugin.LyricOcclusion == null || Plugin.LyricOcclusion.Value; } catch { return true; } }
+        }
 
         private static float Distance
         {
@@ -851,7 +1079,7 @@ namespace PeakMusic
         {
             float dist = Distance;
             float screenWorldH = 2f * dist * Mathf.Tan(camera.fieldOfView * Mathf.Deg2Rad * .5f);
-            float worldH = Mathf.Clamp(px, 16f, 140f) / 1080f * screenWorldH;
+            float worldH = Mathf.Clamp(px, 16f, 200f) / 1080f * screenWorldH;
 
             main.fontSize = worldH * 10f;           // TMP 世界空间：1pt ≈ 0.1 世界单位
             main.ForceMeshUpdate(true, true);
