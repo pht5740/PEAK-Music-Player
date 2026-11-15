@@ -353,12 +353,23 @@ namespace PeakMusic
             return string.IsNullOrEmpty(v) ? fallback : v;
         }
 
+        // 上一次的原始 cfg 值。用来做「没变就直接返回」的快路径。
+        private static string _rawLit, _rawRest, _rawSub;
+
         private static void Sync()
         {
-            string l = Norm(Get(Plugin.LyricColorLit, "FFFFFF"));
-            string r = Norm(Get(Plugin.LyricColorRest, "808080"));
-            string s = Norm(Get(Plugin.LyricColorSub, "FFFFFF"));
+            // 这个方法每帧会被调 ~9 次（逐字循环里取 Lit/Rest）。
+            // 以前每次都对三个字符串做 Trim + ToUpperInvariant —— 每帧 20 多个字符串分配，
+            // GC 一来就是掉帧尖峰，多人房里尤其明显。
+            // 先比 cfg 原始值：BepInEx 在值没改时返回同一个字符串实例，== 走引用快路径，
+            // 只有真的改过颜色才做规范化与解析。
+            string rl = Get(Plugin.LyricColorLit, "FFFFFF");
+            string rr = Get(Plugin.LyricColorRest, "808080");
+            string rs = Get(Plugin.LyricColorSub, "FFFFFF");
+            if (rl == _rawLit && rr == _rawRest && rs == _rawSub) return;
+            _rawLit = rl; _rawRest = rr; _rawSub = rs;
 
+            string l = Norm(rl), r = Norm(rr), s = Norm(rs);
             if (l != _kLit) { _kLit = l; _lit = Parse(l, Color.white); }
             if (r != _kRest) { _kRest = r; _rest = Parse(r, Color.gray); }
             if (s != _kSub) { _kSub = s; _sub = Parse(s, Color.white); }

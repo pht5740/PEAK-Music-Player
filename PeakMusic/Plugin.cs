@@ -14,7 +14,7 @@ namespace PeakMusic
     public sealed class Plugin : BaseUnityPlugin
     {
         public const string Guid = "com.peakmusic.probe";
-        public const string Version = "1.4.6";
+        public const string Version = "1.4.7";
 
         internal static ManualLogSource Log;
         internal static Plugin Instance;
@@ -28,6 +28,14 @@ namespace PeakMusic
         internal static ConfigEntry<int> QualityLevel;
         internal static ConfigEntry<int> MaxLosslessSeconds;
         internal static ConfigEntry<bool> RepeatOne;
+        internal static ConfigEntry<bool> SyncLocalFollow;
+        internal static ConfigEntry<bool> LyricWrap;
+        internal static ConfigEntry<bool> LyricStripPunct;
+        internal static ConfigEntry<bool> LyricThroughWall;
+        internal static ConfigEntry<string> LyricFont;
+        internal static ConfigEntry<int> LyricDepth;
+        internal static ConfigEntry<bool> KillHelpersOnExit;
+        internal static ConfigEntry<bool> LocalAutoStart;
         internal static ConfigEntry<bool> LyricColorFromStyle;
         internal static ConfigEntry<int> LyricWarp;
         internal static ConfigEntry<bool> LyricOcclusion;
@@ -140,6 +148,41 @@ namespace PeakMusic
             RepeatOne = Config.Bind("播放", "RepeatOne", false,
                 "单曲循环：开着时一首播完从头再放，不会切下一首。"
                 + "面板底栏的「↻ 单曲」按钮改的就是这一项，改完立刻生效并自动存盘。");
+
+            KillHelpersOnExit = Config.Bind("界面", "KillHelpersOnExit", true,
+                "退出游戏时自动结束残留的后台进程（MusicListsGUI / MusicProgressReader / QmLyricsServer）。"
+                + "这些进程由本地模式的采集器拉起，退出时不收干净会让 Steam 一直显示「正在停止」。"
+                + "用管理器安装的用户也能自动生效，不需要手动点 bat。");
+
+            LocalAutoStart = Config.Bind("本地", "AutoStart", true,
+                "启动游戏时自动准备并拉起本地模式的 MusicListsGUI（随包的运行时压缩包会在第一次启动时解压到 "
+                + "BepInEx\\PeakMusic\\Local）。关掉后本地模式需要自己手动开 MusicListsGUI.exe。");
+
+            LyricWrap = Config.Bind("歌词", "Wrap", true,
+                "长句自动拆两行：超过 14 个字时，在中点附近找逗号/顿号/空格断开，"
+                + "避免整句横向拉出屏幕。找不到合适断点时保持原样（不会硬切词）。");
+
+            LyricStripPunct = Config.Bind("歌词", "StripPunct", false,
+                "去掉歌词里的逗号、句号、引号、括号等标点。默认关，保持歌词原样。");
+
+            LyricThroughWall = Config.Bind("歌词", "ThroughWall", false,
+                "穿透地形：把歌词材质换成带深度测试的 TMP 变体并设为 Always，永远不会被山体/墙挡住。"
+                + "比「贴墙自动拉近」更彻底，但会失去远近遮挡感；改了要重启游戏。");
+
+            LyricFont = Config.Bind("歌词", "Font", "",
+                "歌词字体：填系统里已安装的字体名（如 Microsoft YaHei / SimHei / 楷体 KaiTi），"
+                + "留空 = 自动（按 雅黑 → 正黑 → 黑体 → 宋体 → 等线 的顺序找系统里有的那一款）。"
+                + "面板侧栏「字体」按钮会在这个列表里循环切；自己装的字体也能填名字。");
+
+            LyricDepth = Config.Bind("歌词", "Depth", 1,
+                new ConfigDescription("立体感：0=关（纯平面）1=轻（字形倒角 + 轻微斜置 + 投影）"
+                                    + " 2=强（厚倒角 + 明显倾斜）。面板侧栏「立体」按钮可切换。",
+                    new AcceptableValueRange<int>(0, 2)));
+
+            SyncLocalFollow = Config.Bind("一起听", "LocalFollow", true,
+                "本地模式也参与一起听：房主开着本地模式放歌时，把「歌名 + 直链 + 进度」发给房间，"
+                + "队友各自取流播放（同一个文件、时间轴对齐）；取不到直链就只发歌名，队友自己搜。"
+                + "关掉后本地模式只在房主自己机器上显示歌词，不广播。");
 
             Theme = Config.Bind("界面", "Theme", 0,
                 new ConfigDescription("面板配色：0=丝绒玫瑰 1=午夜石墨 2=极光海 3=曜石红（面板右上角按钮也能切）",
@@ -416,6 +459,7 @@ namespace PeakMusic
             root.AddComponent<MusicPanel>();      // 面板 + 播放器（MusicPanel.Awake 里挂 MusicPlayer）
             root.AddComponent<LyricOverlay>();    // 漂浮歌词
             root.AddComponent<LocalBridge>();     // 本地模式：读 MusicListsGUI 的只读接口
+            LocalRuntime.Boot();                  // 本地模式：解压随包运行时 + 拉起她的面板（后台线程）
 
             Log.LogInfo("[PeakMusic] ===== 构建 " + BuildStamp + " =====");
             Log.LogInfo("[PeakMusic] 面板已挂载：F1 / F2 开关，输入歌名 → 搜索 → 点一行播放。");
@@ -438,7 +482,7 @@ namespace PeakMusic
         // BepInEx 5 控制台编码（UnityInjector.ConsoleEncoding.ReadByteBuffer 越界），
         // 且会毒化后续所有插件的日志 → PRZ 加载失败 → Fatal 进不了游戏。
         // 历史根因记录放 CHANGELOG.md / 记忆文件，别再堆回这里。
-        internal const string BuildStamp = "2026-11-14 / v1.4.6（本地模式 · 逐字光效 · 灵动岛）";
+        internal const string BuildStamp = "2026-11-15 / v1.4.7（本地一起听 · 系统字体 · 立体感）";
 
         internal static string SideName(int side)
         {
@@ -448,6 +492,59 @@ namespace PeakMusic
         private void OnApplicationQuit()
         {
             Log.LogInfo("[PeakMusic] 退出中——如果这条之后日志还在刷，说明有东西没清干净。");
+            KillHelperProcesses();
+        }
+
+        /// <summary>
+        /// 退出时结束本地模式那套后台进程。
+        ///
+        /// 为什么必须我们来做：她们的采集器（MusicListsGUI / MusicProgressReader / QmLyricsServer）
+        /// 是游戏里拉起来的子进程，游戏退出时不一定跟着走；只要还有一个活着，
+        /// Steam 的「停止」就会一直卡在「正在停止」（Steam 等整棵进程树）。
+        ///
+        /// 做在插件里而不是 bat：用 r2modman / Thunderstore 管理器安装的人根本不会去点 bat。
+        /// 全部 best-effort，任何一个失败都不影响退出。
+        /// </summary>
+        private static void KillHelperProcesses()
+        {
+            try
+            {
+                if (KillHelpersOnExit != null && !KillHelpersOnExit.Value) return;
+
+                string[] names = { "MusicListsGUI", "MusicProgressReader", "QmLyricsServer" };
+                foreach (string name in names)
+                {
+                    try
+                    {
+                        System.Diagnostics.Process[] list = System.Diagnostics.Process.GetProcessesByName(name);
+                        for (int i = 0; i < list.Length; i++)
+                        {
+                            try
+                            {
+                                list[i].Kill();
+                                list[i].WaitForExit(1500);
+                                Log.LogInfo("[PeakMusic] 退出清理：已结束 " + name + "（pid " + list[i].Id + "）");
+                            }
+                            catch (System.Exception e)
+                            {
+                                Log.LogWarning("[PeakMusic] 退出清理：" + name + " 结束失败 " + e.Message);
+                            }
+                            finally
+                            {
+                                try { list[i].Dispose(); } catch { }
+                            }
+                        }
+                    }
+                    catch (System.Exception e)
+                    {
+                        Log.LogWarning("[PeakMusic] 退出清理：" + name + " 查询失败 " + e.Message);
+                    }
+                }
+            }
+            catch (System.Exception e)
+            {
+                Log.LogWarning("[PeakMusic] 退出清理异常：" + e.Message);
+            }
         }
     }
 }

@@ -107,6 +107,26 @@ namespace PeakMusic
             Plugin.Volume.Value = Volume;
         }
 
+        /// <summary>
+        /// 就地跳转（不重新下载）。只有「整曲已下载」的 clip 才能可靠跳 ——
+        /// 流式播放时 Unity 的 time setter 不落位（见类注释第 2 条），所以返回 false，
+        /// 调用方应改用 Play(song, url, 目标秒) 整曲重载。
+        /// </summary>
+        public bool SeekTo(float seconds)
+        {
+            if (_clip == null || _src == null) return false;
+            if (_clip.length <= 1f) return false;
+            float target = Mathf.Clamp(seconds, 0f, _clip.length - 1f);
+            try
+            {
+                _src.time = target;
+                bool ok = Mathf.Abs(_src.time - target) < 1.2f;
+                if (ok) Log.LogInfo(Tag + " 跳转到 " + target.ToString("F1") + "s");
+                return ok;
+            }
+            catch { return false; }
+        }
+
         /// <summary>开始播放。startAt &gt; 0 时会走整曲下载（见类注释第 2 条）。</summary>
         public void Play(SongInfo song, string url, float startAt = 0f)
         {

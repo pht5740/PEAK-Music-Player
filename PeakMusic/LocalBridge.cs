@@ -35,6 +35,7 @@ namespace PeakMusic
         private readonly object _gate = new object();
         private bool _alive;
         private string _title = "";
+        private string _songKey = "";
         private string _artist = "";
         private string _source = "";
         private double _posMs;
@@ -62,7 +63,9 @@ namespace PeakMusic
 
         internal string SongKey
         {
-            get { lock (_gate) return string.IsNullOrEmpty(_title) ? "" : _title + "|" + _artist; }
+            // 以前每次访问都拼 "歌名|歌手" —— 而它每帧会被问两次（一起听广播 + 歌词层），
+            // 每秒 120 个临时字符串。现在只在轮询拿到新歌时拼一次。
+            get { lock (_gate) return _songKey; }
         }
 
         /// <summary>当前进度（毫秒）：在最后一次轮询的基础上，按本地时钟外推，避免 500ms 台阶。</summary>
@@ -96,7 +99,7 @@ namespace PeakMusic
             string raw = Lrc;
             if (string.IsNullOrEmpty(raw)) return "";
 
-            if (!string.Equals(raw, _lineRaw, StringComparison.Ordinal))
+            if (!ReferenceEquals(raw, _lineRaw) && !string.Equals(raw, _lineRaw, StringComparison.Ordinal))
             {
                 _lineRaw = raw;
                 _lineCache = null;
@@ -187,6 +190,7 @@ namespace PeakMusic
                 _alive = true;
                 _title = title;
                 _artist = MiniJson.Str(p, "artist", "") ?? "";
+                _songKey = string.IsNullOrEmpty(_title) ? "" : _title + "|" + _artist;
                 _source = MiniJson.Str(p, "source", "") ?? "";
                 _posMs = pos;
                 _lenMs = end;
@@ -199,7 +203,7 @@ namespace PeakMusic
 
         private void MarkDead()
         {
-            lock (_gate) { _alive = false; _lrc = ""; }
+            lock (_gate) { _alive = false; _lrc = ""; _songKey = ""; }
         }
 
         private bool Discover()

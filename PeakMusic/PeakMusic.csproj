@@ -5,7 +5,7 @@
     <LangVersion>latest</LangVersion>
     <AssemblyName>PeakMusic</AssemblyName>
     <RootNamespace>PeakMusic</RootNamespace>
-    <Version>1.4.6</Version>
+    <Version>1.4.7</Version>
 
     <!--
       注意：这份引用清单是按 Unity 6000.3.15（Unity 6）改过的。
@@ -30,6 +30,9 @@
     <!-- BepInEx 5 本体，绝不复制到输出目录 -->
     <!-- 推 Folia Stage API 用到 HttpClient（net472 必须显式引） -->
     <Reference Include="System.Net.Http" />
+    <!-- 本地模式：首次启动时把随包的 MusicListsGUI.runtime.zip 解压出来 -->
+    <Reference Include="System.IO.Compression" />
+    <Reference Include="System.IO.Compression.FileSystem" />
 
     <Reference Include="BepInEx">
       <HintPath>$(GameDir)\BepInEx\core\BepInEx.dll</HintPath>

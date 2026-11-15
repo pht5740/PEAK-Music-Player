@@ -120,6 +120,7 @@ namespace PeakMusic
         private static readonly string[] MetaPrefixes =
         {
             "作词", "作曲", "编曲", "制作人", "出品人", "监制", "混音", "母带", "录音", "和声",
+            "演唱", "原唱", "人声", "后期", "封面", "企划", "制作", "设计", "助理", "词曲",
             "吉他", "贝斯", "键盘", "弦乐", "鼓", "统筹", "策划", "出品", "发行", "词", "曲",
             "OP", "SP", "Lyrics", "Composed", "Arranged", "Produced", "Mixed", "Mastered",
         };
@@ -227,7 +228,10 @@ namespace PeakMusic
             // 屏幕上就出现"灵动岛和她的面板都对、游戏里却在唱别的句子"。
             string raw = b.Lrc ?? "";
             bool songChanged = _extKey != key;
-            if (songChanged || !string.Equals(_extLrc, raw, StringComparison.Ordinal))
+            // 先比引用：桥里的歌词字符串在两次轮询之间是同一个实例，
+            // 不然每帧都要把整篇 LRC（几 KB）比对一遍
+            if (songChanged
+                || (!ReferenceEquals(_extLrc, raw) && !string.Equals(_extLrc, raw, StringComparison.Ordinal)))
             {
                 _extKey = key;
                 _extLrc = raw;
@@ -244,11 +248,17 @@ namespace PeakMusic
                 }
             }
 
-            // 同步探针：3D 层实际画的那句 vs 按进度算出的那句。
-            // 只在真的不一致时打一行（3 秒节流），下次出问题一眼能定位是"时间错"还是"歌词错"。
-            // 自愈：3D 层画的那句和「按进度应显示的那句」不一致超过 2 秒，
-            // 就用最新歌词把整层重建一次。这样即使中间出现任何脏状态（旧列表、残留句、
-            // 她那边中途换了一版歌词），也会在两秒内自动归位，不用重启游戏。
+            if (!Plugin.LyricEnabled.Value || _extLines.Count == 0 || !InWorldScene)
+            {
+                _world.Hide();
+                return true;
+            }
+
+            _world.Tick(key, Camera.main, (float)(b.PositionMsNow / 1000.0));
+
+            // 探针必须放在 Tick **之后**：Tick 里才会把本帧应该显示的那句写进 LastLineText。
+            // 放在前面就永远在拿「上一帧的文字」和「这一帧的进度」比 —— 每次换行都会误报一条
+            // 「本地歌词不同步」，而自愈又因为只差一帧、2 秒内自己恢复了，永远不会触发。
             string srcNow = b.LineTextAt(b.PositionMsNow);
             if (!string.IsNullOrEmpty(srcNow)
                 && !string.Equals(srcNow, WorldLyricRenderer.LastLineText, StringComparison.Ordinal))
@@ -278,13 +288,6 @@ namespace PeakMusic
                                           + "」 pos=" + (pms / 1000.0).ToString("F1") + "s");
             }
 
-            if (!Plugin.LyricEnabled.Value || _extLines.Count == 0 || !InWorldScene)
-            {
-                _world.Hide();
-                return true;
-            }
-
-            _world.Tick(key, Camera.main, (float)(b.PositionMsNow / 1000.0));
             return true;
         }
     }

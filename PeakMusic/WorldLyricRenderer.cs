@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Text;
 using System.Collections.Generic;
 using System.Globalization;
 using PeakMusic.Core;
@@ -32,11 +33,16 @@ namespace PeakMusic
 
         private TMP_FontAsset _font;
         private string _mainFontFile = "";
+        private readonly List<UnityEngine.Object> _fontAssets = new List<UnityEngine.Object>();
+        private int _fontRev = -1;
+
+        /// <summary>字体配置的版本号。面板换了字体就 +1，渲染层下一帧自动重载。</summary>
+        internal static int FontRevision;
         private GameObject _root;
         private Entry _current;
         private int _serial;
         private bool _fontFailed;
-        private string _renderKey = "";
+        private int _renderIndex = -1;
         private LyricFx _fx;
         private int _styleSig;
         private float _retryAt;
@@ -55,14 +61,14 @@ namespace PeakMusic
         {
             _songKey = songKey ?? "";
             _lines = lines ?? new List<LrcLine>();
-            _renderKey = "";
+            _renderIndex = -1;
             ClearEntries();
         }
 
         internal void Hide()
         {
             ClearEntries();
-            _renderKey = "";
+            _renderIndex = -1;
         }
 
         /// <summary>
@@ -98,7 +104,7 @@ namespace PeakMusic
             {
                 _songKey = songKey;
                 ClearEntries();
-                _renderKey = "";
+                _renderIndex = -1;
             }
 
             double positionMs = nowSeconds * 1000.0;
@@ -131,26 +137,32 @@ namespace PeakMusic
                 // 看起来就是「点了样式没反应」，要等下一句才变。
                 _styleSig = styleSig;
                 ClearEntries();
-                _renderKey = "";
+                _renderIndex = -1;
             }
 
             LastLineText = line.Text;
-            string key = _songKey + "/" + index;
-            if (key != _renderKey || (_current == null && Time.unscaledTime >= _retryAt))
+            // key 以前是字符串拼接 "_songKey/index" —— 每帧都 new 一个字符串，
+            // 60 帧就是每秒 60 次小对象分配，GC 一到就是掉帧尖峰。
+            // 现在只比一句的整数下标：换歌时 SetLyrics() 会 ClearEntries()，_current 变 null，
+            // 下面的 _current == null 分支照样会重生，语义完全一致。
+            if (index != _renderIndex || (_current == null && Time.unscaledTime >= _retryAt))
             {
                 Retire();
-                _renderKey = key;
+                _renderIndex = index;
                 _retryAt = Time.unscaledTime + .8f;
                 _current = Spawn(line, endMs, camera);
             }
 
-            // 特效层：跟着当前这句走（换句爆点、逐字触发都在它内部判断）
-            if (_fx == null && _root != null) _fx = LyricFx.Create(_root.transform);
-            if (_fx != null)
+            // 粒子特效已下线：面板里「歌词特效」那一排按用户要求删掉了（效果不好看、也没人用）。
+            // 代码和 cfg 都还在，把 FxMode 改回读配置就能恢复。
+            if (FxMode > 0)
             {
-                // 特效必须和歌词同一距离：拉近后如果还画在 14m，就会整片留在岩壁后面
-                float fxDist = (_current != null && _current.Dist > .01f) ? _current.Dist : Distance;
-                _fx.Tick(camera, fxDist, FxMode, index, positionMs, startMs, endMs, line.Text.Length);
+                if (_fx == null && _root != null) _fx = LyricFx.Create(_root.transform);
+                if (_fx != null)
+                {
+                    float fxDist = (_current != null && _current.Dist > .01f) ? _current.Dist : Distance;
+                    _fx.Tick(camera, fxDist, FxMode, index, positionMs, startMs, endMs, line.Text.Length);
+                }
             }
 
             Animate(camera, positionMs);
@@ -160,6 +172,19 @@ namespace PeakMusic
 
         private bool EnsureFont()
         {
+            // 面板换了字体：旧图集必须丢掉重建，否则字形还是旧的
+            int rev = FontRevision;
+            if (rev != _fontRev)
+            {
+                if (_fontRev >= 0)
+                {
+                    ReleaseFonts();
+                    ClearEntries();
+                    _renderIndex = -1;
+                }
+                _fontRev = rev;
+            }
+
             if (_font != null) return true;
             if (_fontFailed) return false;
 
@@ -168,22 +193,52 @@ namespace PeakMusic
                 _root = new GameObject("PeakMusic world lyrics");
                 UnityEngine.Object.DontDestroyOnLoad(_root);
 
-                foreach (string file in new[] { "msyh.ttc", "msyh.ttf", "simhei.ttf", "simsun.ttc" })
+                // ① 用户指定的字体（cfg 的 [歌词] Font，可以是系统里任何已安装字体）。
+                //    以前这里写死 msyh/simhei/simsun 四个文件名 —— 英文版 Windows 上一个都不存在，
+                //    3D 歌词就整块失效；玩家自己装了好看的中文字体也用不上。
+                string want = Plugin.LyricFont != null ? (Plugin.LyricFont.Value ?? "").Trim() : "";
+                if (want.Length > 0)
                 {
-                    var candidate = FileFont(file);
-                    if (candidate == null) continue;
-                    if (candidate.material != null && candidate.material.shader.isSupported)
+                    string path = FontLibrary.ResolveFile(want);
+                    if (path == null)
+                        Plugin.Log?.LogWarning(Tag + " 指定的字体「" + want + "」没装在系统里，改用自动选择");
+                    else
                     {
-                        _font = candidate;
-                        _mainFontFile = file;
-                        break;
+                        var asset = FileFont(path);
+                        if (asset != null && asset.material != null && asset.material.shader.isSupported)
+                        {
+                            _font = asset;
+                            _mainFontFile = System.IO.Path.GetFileName(path);
+                        }
+                        else
+                        {
+                            if (asset != null) ReleaseAsset(asset);
+                            Plugin.Log?.LogWarning(Tag + " 指定的字体「" + want + "」生成图集失败，改用自动选择");
+                        }
                     }
-                    ReleaseAsset(candidate);
                 }
-                if (_font == null) throw new InvalidOperationException("系统字体文件无法生成可用图集");
 
-                _resources.Add(_font);
-                _resources.Add(_font.material);
+                // ② 自动：中 → 繁 → 日 → 韩，逐个试系统里真实存在的字体
+                if (_font == null)
+                {
+                    string[] auto = FontLibrary.AutoFiles();
+                    for (int i = 0; i < auto.Length && _font == null; i++)
+                    {
+                        var asset = FileFont(auto[i]);
+                        if (asset == null) continue;
+                        if (asset.material != null && asset.material.shader.isSupported)
+                        {
+                            _font = asset;
+                            _mainFontFile = System.IO.Path.GetFileName(auto[i]);
+                        }
+                        else ReleaseAsset(asset);
+                    }
+                }
+
+                if (_font == null) throw new InvalidOperationException("系统里没有能生成 SDF 图集的字体");
+
+                _fontAssets.Add(_font);
+                _fontAssets.Add(_font.material);
 
                 // 主字体只有一个就是「韩文变方块」的病根：msyh.ttc 里没有任何韩文字形
                 // （2026-11-12 实测 29,905 个字形，谚文一个都没有）。TMP 找不到字形就画白框，
@@ -193,7 +248,8 @@ namespace PeakMusic
                 //   tahoma.ttf：泰 ✓ 越南 ✓ 阿拉伯 ✓ 俄 ✓ 英 ✓（无中日韩）
                 BuildFallbacks();
 
-                Plugin.Log?.LogInfo(Tag + " SDF 字体就绪（主 " + _mainFontFile + "）。");
+                Plugin.Log?.LogInfo(Tag + " SDF 字体就绪（主 " + _mainFontFile + "）· 系统字体 "
+                                    + FontLibrary.Count + " 个");
                 return true;
             }
             catch (Exception e)
@@ -205,17 +261,8 @@ namespace PeakMusic
             }
         }
 
-        /// <summary>
-        /// 回退字体顺序 = 覆盖优先级。TMP 只有主字体缺字形时才往这里找，
-        /// 所以顺序不影响中文观感，只影响「哪种语言先命中」。
-        /// </summary>
-        private static readonly string[] FallbackFiles =
-        {
-            "malgun.ttf",      // 韩文（Windows 自带，覆盖 11,172 个谚文音节）
-            "malgunsl.ttf",    // 韩文细体（malgun 缺失时兜底）
-            "tahoma.ttf",      // 泰文 / 越南文 / 阿拉伯 / 拉丁
-            "YuGothM.ttc",     // 日文汉字补充（雅黑只有假名，没有部分和制汉字）
-        };
+        // 回退字体表在 FontLibrary.Fallbacks() 里（顺序 = 覆盖优先级）。
+        // TMP 只有主字体缺字形时才往这里找，所以顺序不影响中文观感，只影响「哪种语言先命中」。
 
         /// <summary>把系统里的其它语言字体挂成 TMP 的回退链，缺字形时自动降级过去。</summary>
         private void BuildFallbacks()
@@ -224,9 +271,12 @@ namespace PeakMusic
             var got = new List<string>();
             try
             {
-                foreach (string file in FallbackFiles)
+                string[] files = FontLibrary.Fallbacks();
+                for (int i = 0; i < files.Length; i++)
                 {
-                    if (file == _mainFontFile) continue;
+                    string file = files[i];
+                    if (string.Equals(System.IO.Path.GetFileName(file), _mainFontFile,
+                                      StringComparison.OrdinalIgnoreCase)) continue;
                     var asset = FileFont(file);
                     if (asset == null) continue;
                     if (asset.material == null || !asset.material.shader.isSupported)
@@ -240,9 +290,9 @@ namespace PeakMusic
                     try { asset.isMultiAtlasTexturesEnabled = true; } catch { }
 
                     list.Add(asset);
-                    _resources.Add(asset);
-                    if (asset.material != null) _resources.Add(asset.material);
-                    got.Add(file);
+                    _fontAssets.Add(asset);
+                    if (asset.material != null) _fontAssets.Add(asset.material);
+                    got.Add(System.IO.Path.GetFileName(file));
                 }
 
                 if (list.Count == 0)
@@ -262,9 +312,12 @@ namespace PeakMusic
             }
         }
 
-        private static TMP_FontAsset FileFont(string name)
+        private static TMP_FontAsset FileFont(string nameOrPath)
         {
-            string path = System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Fonts), name);
+            // 注册表里的值可能是绝对路径（Win10 起「仅为当前用户安装」的字体在 LocalAppData）
+            string path = System.IO.Path.IsPathRooted(nameOrPath)
+                ? nameOrPath
+                : System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Fonts), nameOrPath);
             if (!System.IO.File.Exists(path)) return null;
             try
             {
@@ -301,6 +354,8 @@ namespace PeakMusic
             internal bool GlowOn;             // 当前是否开着光晕
             internal TextMeshPro Glow;        // 只画「唱到的字」的光晕层
             internal float[] LitT;            // 每个字符的演唱进度 0..1，发光层复用
+            internal float[] JitterX;         // 散聚样式的稳定偏移（生成时算一次）
+            internal float[] JitterY;
             internal float TargetDist;        // 遮挡探测缓存（10Hz 刷新）
             internal float NextProbe;         // 下次探测时间
             internal Vector3 Viewport;
@@ -315,7 +370,7 @@ namespace PeakMusic
         {
             if (_root == null || _font == null) return null;
 
-            string text = Limit(line.Text, 160);
+            string text = WrapText(StripPunct(Limit(line.Text, 160)));
 
             var e = new Entry
             {
@@ -350,6 +405,8 @@ namespace PeakMusic
                 gm.SetColor("_GlowColor", new Color(lc.r, lc.g, lc.b, 1f));
                 if (gm.HasProperty("_GlowPower")) gm.SetFloat("_GlowPower", .62f);
                 if (gm.HasProperty("_GlowOuter")) gm.SetFloat("_GlowOuter", .33f);
+                // 发光层是同一批字的副本：再叠一层倒角/投影只会更脏，关掉
+                gm.DisableKeyword("UNDERLAY_ON");
                 if (gm.HasProperty("_GlowInner")) gm.SetFloat("_GlowInner", .08f);
                 if (gm.HasProperty("_GlowOffset")) gm.SetFloat("_GlowOffset", .02f);
             }
@@ -382,8 +439,18 @@ namespace PeakMusic
             }
 
             e.Original = e.Main.textInfo.CopyMeshInfoVertexData();
-            e.CharacterToGrapheme = new int[e.Main.textInfo.characterCount];
-            e.LitT = new float[e.Main.textInfo.characterCount];
+            int charCount = e.Main.textInfo.characterCount;
+            e.CharacterToGrapheme = new int[charCount];
+            e.LitT = new float[charCount];
+            // 「散聚」样式每个字要两份稳定伪随机。字符数是固定的，生成时算一次就够 ——
+            // 以前每帧每字算两次整数 hash（50 字 × 60 帧 = 每秒 6000 次）。
+            e.JitterX = new float[charCount];
+            e.JitterY = new float[charCount];
+            for (int i = 0; i < charCount; i++)
+            {
+                e.JitterX[i] = Hash01(i) - .5f;
+                e.JitterY[i] = Hash01(i + 977) - .5f;
+            }
             for (int i = 0; i < e.CharacterToGrapheme.Length; i++)
             {
                 int source = e.Main.textInfo.characterInfo[i].index;
@@ -423,6 +490,7 @@ namespace PeakMusic
 
             var material = new Material(text.fontSharedMaterial);
             text.fontSharedMaterial = material;
+            TryOverlayShader(material);          // 必须在 ApplyMaterial 之前：换 shader 会清掉材质属性
             ApplyMaterial(material, isDark: false);
 
             text.UpdateMeshPadding();
@@ -505,6 +573,48 @@ namespace PeakMusic
         // ───────────────────────────── 材质 ─────────────────────────────
 
         /// <summary>字面颜色（面板配色）+ SDF 描边。</summary>
+        private static bool _overlayTried, _overlayOk;
+        private static Shader _overlayShader;
+
+        /// <summary>是否开了「穿透地形」。</summary>
+        private static bool ThroughWallOn
+        {
+            get { try { return Plugin.LyricThroughWall != null && Plugin.LyricThroughWall.Value; } catch { return false; } }
+        }
+
+        /// <summary>
+        /// 穿透地形：TMP 的 Mobile 变体没有 `_ZTest`，必须换成完整的 Distance Field 变体，
+        /// 把深度测试设成 Always（=8）并压到最后渲染，字幕就永远不会被山体/墙挡住。
+        /// 参考的是琳玲那套悬浮字幕的做法；换不到 shader 就静默回退到「贴墙拉近」。
+        /// </summary>
+        private static void TryOverlayShader(Material m)
+        {
+            if (!ThroughWallOn || m == null) return;
+
+            if (!_overlayTried)
+            {
+                _overlayTried = true;
+                try
+                {
+                    _overlayShader = Shader.Find("TextMeshPro/Distance Field");
+                    _overlayOk = _overlayShader != null && _overlayShader.isSupported;
+                }
+                catch { _overlayOk = false; }
+                Plugin.Log?.LogInfo("[歌词3D] 穿透地形：" + (_overlayOk
+                    ? "已切到 TextMeshPro/Distance Field（_ZTest=Always）"
+                    : "shader 不可用，回退「贴墙自动拉近」"));
+            }
+            if (!_overlayOk) return;
+
+            try
+            {
+                if (m.shader != _overlayShader) m.shader = _overlayShader;
+                if (m.HasProperty("_ZTest")) m.SetFloat("_ZTest", 8f);   // CompareFunction.Always
+                m.renderQueue = 5000;
+            }
+            catch { }
+        }
+
         private static void ApplyMaterial(Material material, bool isDark)
         {
             // 亮度过 1 时颜色会往白里走（分量夹到 1），视觉上就是"更亮更抓眼"。
@@ -562,6 +672,35 @@ namespace PeakMusic
             // 永远置前，保证歌词不被地形吞掉。不支持就靠避墙拉近兜底（HasProperty 护栏）。
             if (material.HasProperty("_ZTest"))
                 material.SetFloat("_ZTest", (float)CompareFunction.Always);
+
+            // ── 立体感 ──
+            // 「像纸片贴在屏幕上」有两个原因：正对相机（没有透视）+ 字形完全平。
+            // 这里做字形这一半：SDF 自带 bevel（斜切倒角）+ underlay（投影），
+            // 不增加任何网格、不增加 draw call，纯改材质参数。
+            int depth = DepthLevel;
+            if (depth > 0)
+            {
+                if (material.HasProperty("_Bevel"))
+                {
+                    material.EnableKeyword("BEVEL_ON");
+                    material.SetFloat("_Bevel", depth == 2 ? .90f : .45f);
+                    if (material.HasProperty("_BevelType")) material.SetFloat("_BevelType", depth == 2 ? 2f : 1f);
+                    if (material.HasProperty("_BevelWidth")) material.SetFloat("_BevelWidth", .18f);
+                    if (material.HasProperty("_BevelOffset")) material.SetFloat("_BevelOffset", .03f);
+                    if (material.HasProperty("_BevelClamp")) material.SetFloat("_BevelClamp", .65f);
+                    if (material.HasProperty("_BevelRoundness")) material.SetFloat("_BevelRoundness", .35f);
+                }
+
+                if (material.HasProperty("_UnderlayColor"))
+                {
+                    material.EnableKeyword("UNDERLAY_ON");
+                    material.SetColor("_UnderlayColor", new Color(0f, 0f, 0f, depth == 2 ? .55f : .35f));
+                    if (material.HasProperty("_UnderlayOffsetX")) material.SetFloat("_UnderlayOffsetX", .22f);
+                    if (material.HasProperty("_UnderlayOffsetY")) material.SetFloat("_UnderlayOffsetY", -.22f);
+                    if (material.HasProperty("_UnderlayDilate")) material.SetFloat("_UnderlayDilate", .12f);
+                    if (material.HasProperty("_UnderlaySoftness")) material.SetFloat("_UnderlaySoftness", .18f);
+                }
+            }
         }
 
         // ───────────────────────────── 动画 ─────────────────────────────
@@ -616,6 +755,9 @@ namespace PeakMusic
                 h = h * 31 + (Plugin.LyricSize != null ? Plugin.LyricSize.Value : 0);
                 h = h * 31 + LyricWeight;
                 h = h * 31 + Mathf.RoundToInt(RestAlpha * 100f);
+                h = h * 31 + DepthLevel;
+                h = h * 31 + (Plugin.LyricFont != null && Plugin.LyricFont.Value != null
+                              ? Plugin.LyricFont.Value.GetHashCode() : 0);
             }
             catch { }
             return h;
@@ -738,7 +880,7 @@ namespace PeakMusic
                     // 参考做法就一句话「距离拉近、字号拉大」：距离按射线命中点收，
                     // 再把整体缩放乘 dist/Distance —— 屏幕上的字号不变，只是离眼睛更近。
                     float target = Distance;
-                    if (Occlusion)
+                    if (Occlusion && !ThroughWallOn)
                     {
                         // 每句每秒只探 10 次：物理查询不用每帧做，10Hz 足够跟得上走路/攀爬，
                         // 而 4 句同时在场时这一项从「每帧 8 次查询」降到「每帧不到 1 次」。
@@ -785,6 +927,17 @@ namespace PeakMusic
                     e.Anchor = origin + dir * dist;
                 }
                 e.Root.transform.rotation = Face(e.Anchor, camera);
+                int depthLv = DepthLevel;
+                if (depthLv > 0)
+                {
+                    // 只正对相机 = 无论怎么转头都保持屏幕平行 → 大脑判定"贴在屏幕上"。
+                    // 给一点倾角：文字平面像立在场景里的牌子，转视角时出现透视与视差。
+                    // 幅度很小（轻 6° / 强 13°），不会影响读字。
+                    float t = depthLv == 2 ? 13f : 6f;
+                    float side = e.Viewport.x < .5f ? -1f : 1f;   // 左侧字往中心仰，右侧反之
+                    e.Root.transform.rotation = e.Root.transform.rotation
+                        * Quaternion.Euler(-t * .35f, side * t * .75f, 0f);
+                }
                 if (Mathf.Abs(roll) > .05f)
                     e.Root.transform.rotation = e.Root.transform.rotation * Quaternion.AngleAxis(roll, Vector3.forward);
 
@@ -845,7 +998,8 @@ namespace PeakMusic
 
                     float litT = (float)frame.Alpha;
                     litT = litT * litT * (3f - 2f * litT);                      // smoothstep
-                    if (e.LitT != null && c < e.LitT.Length) e.LitT[c] = litT;
+                    // 只有当前句的发光层会用到 LitT；淡出中的旧句写它纯属浪费（每帧几十次写）
+                    if (isCurrent && e.LitT != null && c < e.LitT.Length) e.LitT[c] = litT;
                     Color rgb = Color.Lerp(restRgb, litRgb, litT);
                     // 不是当前句 → 普通白字，不参与配色/脉冲
                     if (!isCurrent) rgb = Color.white;
@@ -887,8 +1041,8 @@ namespace PeakMusic
                                 break;
                             case 3:   // 散聚：未唱时散布，唱到哪个字哪个字归位
                             {
-                                float j1 = Hash01(c) - .5f;
-                                float j2 = Hash01(c + 977) - .5f;
+                                float j1 = (e.JitterX != null && c < e.JitterX.Length) ? e.JitterX[c] : 0f;
+                                float j2 = (e.JitterY != null && c < e.JitterY.Length) ? e.JitterY[c] : 0f;
                                 float spread = (1f - litT) * 30f;
                                 wx = j1 * spread;
                                 wy = j2 * spread;
@@ -957,7 +1111,9 @@ namespace PeakMusic
                 Array.Copy(src, dst, Math.Min(src.Length, dst.Length));
             }
 
-            Color lit = LyricColors.Lit;
+            // 颜色只换算一次：以前每个字都 new Color32(r*255, g*255, b*255, a)，
+            // 一帧几十个字就是几十次浮点乘 + 两次转换。
+            Color32 baseCol = LyricColors.Lit;
             for (int c = 0; c < gi.characterCount; c++)
             {
                 var ch = gi.characterInfo[c];
@@ -969,11 +1125,85 @@ namespace PeakMusic
                 if (vi < 0 || vi + 3 >= cols.Length) continue;
 
                 float k = (e.LitT != null && c < e.LitT.Length) ? e.LitT[c] : 0f;
-                byte a = (byte)Mathf.Clamp(Mathf.RoundToInt(255f * k * alpha), 0, 255);
-                var cc = new Color32((byte)(lit.r * 255), (byte)(lit.g * 255), (byte)(lit.b * 255), a);
+                int ai = (int)(k * alpha * 255f + .5f);
+                if (ai < 0) ai = 0; else if (ai > 255) ai = 255;
+                var cc = baseCol;
+                cc.a = (byte)ai;
                 for (int q = 0; q < 4; q++) cols[vi + q] = cc;
             }
             e.Glow.UpdateVertexData(TMP_VertexDataUpdateFlags.Vertices | TMP_VertexDataUpdateFlags.Colors32);
+        }
+
+        /// <summary>单行超过这个字数就考虑拆两行。</summary>
+        private const int WrapThreshold = 14;
+
+        private static bool IsBreakChar(char c)
+        {
+            switch (c)
+            {
+                case '，': case '。': case '、': case '；': case '：':
+                case ',': case '.': case ';': case ':':
+                case '!': case '?': case '！': case '？':
+                case ' ': case '\t': case '　':
+                    return true;
+                default:
+                    return false;
+            }
+        }
+
+        /// <summary>
+        /// 长句拆两行。为什么要自己拆：我们的文字矩形是按「整句撑开」算的，
+        /// TMP 的自动换行永远不触发，长句就会横向拉得很长（19 套样式里弧排/斜行更明显）。
+        /// 只在句子中点 ±5 个字符内找标点或空格断开；找不到就原样返回，绝不硬切。
+        /// 换行符在 TMP 里没有可见字形，逐字映射会自然跳过它，不影响逐字点亮。
+        /// </summary>
+        private static string WrapText(string text)
+        {
+            if (string.IsNullOrEmpty(text)) return text ?? "";
+            if (Plugin.LyricWrap == null || !Plugin.LyricWrap.Value) return text;
+
+            int[] starts = StringInfo.ParseCombiningCharacters(text);
+            if (starts.Length <= WrapThreshold) return text;
+
+            int mid = starts.Length / 2;
+            int best = -1;
+            for (int d = 0; d <= 5 && best < 0; d++)
+            {
+                int a = mid - d, b = mid + d;
+                if (a > 0 && a < starts.Length - 1 && IsBreakChar(text[starts[a]])) best = a;
+                else if (d > 0 && b > 0 && b < starts.Length - 1 && IsBreakChar(text[starts[b]])) best = b;
+            }
+            if (best <= 0) return text;
+
+            int cut = starts[best];
+            string head, tail;
+            if (IsBreakChar(text[cut]) && text[cut] != ' ' && text[cut] != '　' && text[cut] != '\t')
+            {
+                head = text.Substring(0, cut + 1);      // 标点留在第一行末尾
+                tail = text.Substring(cut + 1);
+            }
+            else
+            {
+                head = text.Substring(0, cut);          // 空格断开，空格不要
+                tail = text.Substring(cut);
+            }
+            head = head.Trim();
+            tail = tail.Trim();
+            if (head.Length == 0 || tail.Length == 0) return text;
+            return head + "\n" + tail;
+        }
+
+        /// <summary>可选：去掉标点。默认关，歌词保持原样。</summary>
+        private static string StripPunct(string text)
+        {
+            if (string.IsNullOrEmpty(text)) return text ?? "";
+            if (Plugin.LyricStripPunct == null || !Plugin.LyricStripPunct.Value) return text;
+
+            const string drop = "，。、；：！？,.;:!?“”‘’\"'（）()【】[]《》〈〉<>—-…·";
+            var sb = new StringBuilder(text.Length);
+            for (int i = 0; i < text.Length; i++)
+                if (drop.IndexOf(text[i]) < 0) sb.Append(text[i]);
+            return sb.ToString();
         }
 
         private static string Limit(string text, int elements)
@@ -1002,7 +1232,18 @@ namespace PeakMusic
             _root = null;
             foreach (var r in _resources) if (r != null) UnityEngine.Object.Destroy(r);
             _resources.Clear();
+            ReleaseFonts();
+        }
+
+        /// <summary>只释放字体图集（换字体时用）。</summary>
+        private void ReleaseFonts()
+        {
+            for (int i = 0; i < _fontAssets.Count; i++)
+                if (_fontAssets[i] != null) UnityEngine.Object.Destroy(_fontAssets[i]);
+            _fontAssets.Clear();
             _font = null;
+            _mainFontFile = "";
+            _fontFailed = false;
         }
 
         // ───────────────────────────── 参数（对应 cfg，未配则用默认） ─────────────────────────────
@@ -1034,6 +1275,12 @@ namespace PeakMusic
             get { try { return Plugin.LyricOcclusion == null || Plugin.LyricOcclusion.Value; } catch { return true; } }
         }
 
+        /// <summary>立体感档位：0 关 1 轻 2 强（对应 [歌词] Depth）。</summary>
+        private static int DepthLevel
+        {
+            get { try { return Plugin.LyricDepth != null ? Mathf.Clamp(Plugin.LyricDepth.Value, 0, 2) : 1; } catch { return 1; } }
+        }
+
         private static float Distance
         {
             get { return Plugin.LyricDistance != null ? Plugin.LyricDistance.Value : 14f; }
@@ -1045,11 +1292,13 @@ namespace PeakMusic
             get { return Plugin.LyricEdge != null ? Plugin.LyricEdge.Value : 0.25f; }
         }
 
-        /// <summary>句子中心在屏幕上的垂直位置（0.1–0.9）。面板「高度」行也能调。</summary>
-        /// <summary>特效档 0–9（0 = 关）。</summary>
+        /// <summary>
+        /// 特效档 0–9（0 = 关）。**当前恒为 0**：面板里的「歌词特效」一排已按要求删除，
+        /// 粒子层因此完全不创建。想恢复就把这里改回读 Plugin.LyricFxMode。
+        /// </summary>
         private static int FxMode
         {
-            get { try { return Plugin.LyricFxMode != null ? Plugin.LyricFxMode.Value : 0; } catch { return 0; } }
+            get { return 0; }
         }
 
         /// <summary>0 两侧悬浮 / 1 居中滚动。</summary>

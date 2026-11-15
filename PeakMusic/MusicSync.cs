@@ -33,6 +33,7 @@ namespace PeakMusic
         private const byte EvHostSeek = 93;       // 房主：跳转进度（秒）
         private const byte EvQueueAdd = 94;       // 客机 → 房主：点歌进队列
         private const byte EvQueueState = 95;     // 房主 → 全员：队列更新（含批准/移除）
+        private const byte EvLocalSync = 96;      // 房主 → 全员：本地模式进度校准（秒, 是否在放）
 
         // 房间成员把自己「装了模组 + 版本」写进 Photon 玩家属性，别人读得到。
         // 之前完全没做身份探测：客机一律把点歌塞进房主队列，房主没装模组时永远没人批准，
@@ -200,6 +201,12 @@ namespace PeakMusic
         public event Action OnRemoteStop;
         /// <summary>事件：客机收到「跳转进度」秒数。</summary>
         public event Action<float> OnRemoteSeek;
+
+        /// <summary>本地模式的进度校准：(当前秒数, 是否在放)。队友据此微调或重载对齐。</summary>
+        public event Action<float, bool> OnLocalSync;
+
+        /// <summary>最近一次远端播报是否来自「本地模式跟随」（队友不该自动续播，交给房主控制）。</summary>
+        public bool LastPlayLocal { get; private set; }
         /// <summary>事件：房主收到「点歌」。参数：歌曲、点歌人、点歌人取好的直链（可空）。</summary>
         public event Action<SongInfo, string, string> OnQueueAdd;
         /// <summary>事件：全员收到队列快照更新（客机用它刷新队列显示）。</summary>
@@ -283,17 +290,26 @@ namespace PeakMusic
         // ───────────────────────── 发送端（房主） ─────────────────────────
 
         /// <summary>房主广播「开始播这首歌」。</summary>
-        public void BroadcastPlay(SongInfo song, string url, float startAt)
+        public void BroadcastPlay(SongInfo song, string url, float startAt, bool local = false)
         {
             if (!CanBroadcast) { Log.LogDebug(Tag + " 不在房主位，跳过广播播放"); return; }
 
             var payload = new object[]
             {
                 song.Name, song.Artists, song.Album, song.Platform.ToString(), song.SourceId,
-                song.Id, song.DurationMs, url, startAt
+                song.Id, song.DurationMs, url ?? "", startAt, local
             };
             Raise(EvHostPlay, payload);
-            Log.LogInfo(Ts() + Tag + " 房主广播播放：" + song.Name + " - " + song.Artists + " @ " + startAt.ToString("F1") + "s");
+            Log.LogInfo(Ts() + Tag + (local ? " 房主广播播放（本地模式）：" : " 房主广播播放：")
+                        + song.Name + " - " + song.Artists + " @ " + startAt.ToString("F1") + "s"
+                        + (string.IsNullOrEmpty(url) ? "〔无直链，队友自行搜索〕" : "〔含直链〕"));
+        }
+
+        /// <summary>本地模式：每 3 秒报一次进度，队友用它校准（偏差大就重载）。</summary>
+        public void BroadcastLocalSync(float seconds, bool playing)
+        {
+            if (!CanBroadcast) return;
+            Raise(EvLocalSync, new object[] { seconds, playing });
         }
 
         /// <summary>房主广播「暂停/继续」。true=暂停。</summary>
@@ -387,11 +403,16 @@ namespace PeakMusic
                         if (a != null && a.Length >= 9 && !fromSelf)
                         {
                             var song = FromArray(a, 0, "");
-                            string url = (string)a[7];
+                            string url = a[7] as string ?? "";
                             float start = (float)Convert.ToDouble(a[8]);
-                            if (song != null && !string.IsNullOrEmpty(url))
+                            bool local = a.Length >= 10 && Convert.ToBoolean(a[9]);
+                            LastPlayLocal = local;
+                            // 本地模式可能取不到直链：url 为空时队友按「歌名 + 歌手」自己搜一首
+                            if (song != null)
                             {
-                                Log.LogInfo(Ts() + Tag + " 收到播放指令：" + song.Name + " @ " + start.ToString("F1") + "s");
+                                Log.LogInfo(Ts() + Tag + (local ? " 收到播放指令（本地模式）：" : " 收到播放指令：")
+                                            + song.Name + " @ " + start.ToString("F1") + "s"
+                                            + (string.IsNullOrEmpty(url) ? "〔无直链，自行搜索〕" : ""));
                                 var h = OnRemotePlay;
                                 if (h != null) h(song, url, start);
                                 else Log.LogWarning(Ts() + Tag + " 没有订阅者响应播放指令（面板订阅丢了？）");
@@ -422,6 +443,16 @@ namespace PeakMusic
                             float sec = (float)Convert.ToDouble(a[0]);
                             var h = OnRemoteSeek;
                             if (h != null) h(sec);
+                        }
+                        break;
+
+                    case EvLocalSync:
+                        if (a != null && a.Length >= 2 && !fromSelf)
+                        {
+                            float sec = (float)Convert.ToDouble(a[0]);
+                            bool playing = Convert.ToBoolean(a[1]);
+                            var h = OnLocalSync;
+                            if (h != null) h(sec, playing);
                         }
                         break;
 

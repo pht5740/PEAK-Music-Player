@@ -107,6 +107,28 @@ namespace PeakMusic
         private int _taskKind;          // 0 无 / 1 搜索 / 2 取地址 / 3 续拉 / 4 客机点歌（先取流再入队）
         private List<SongInfo> _pendingSongs;
         private SongUrlResult _pendingUrl;
+
+        // ── 一起听 · 本地模式 ──
+        private bool _remoteFollow;                 // 当前放的是房主推来的歌（播完不许自动续播）
+        private SongInfo _remoteSong;
+        private string _remoteUrl = "";
+        private volatile bool _rrDone;              // 客机自行搜歌：后台完成标记
+        private int _rrSeq, _rrSeq2;
+        private SongInfo _rrSong;
+        private string _rrUrl = "";
+        private float _rrStartAt;
+        private string _bcKey = "";                 // 房主：已广播的本地歌
+        private string _bcUrl = "";
+        private bool _bcResolving, _bcHaveResult, _bcWasPlaying, _bcWasOn;
+        private float _lastReloadAt;
+        private int _reloadTries;
+        private float _lastSyncSec, _lastSyncAt;
+        private bool _hadClip;
+        private SongInfo _bcSong, _bcResultSong;
+        private string _bcResultUrl = "";
+        private float _bcNextSync;
+        private int _bcCrowd = -1;              // 上次看到的「房里其他人」数量
+        private float _bcRebroadcastAt;         // 有人新进房 → 延迟补发当前歌
         private SongInfo _pendingSong;
         private string _pendingRequester;   // 客机点歌：等取完流一起发给房主的点歌人昵称
         private string _taskError;
@@ -188,6 +210,7 @@ namespace PeakMusic
 
         // 左侧音源导航（照 MuoniumPlayer 的侧栏骨架）
         private Rect _rNav, _rNavLine, _rLyricPos, _rLyricColor, _rLyricSize, _rLyricHeight, _rLyricEdge, _rLyricDist, _rLyricBright;
+        private Rect _rLyricFont, _rLyricDepth;
 
         /// <summary>
         /// 歌词样式选择页是否开着。真正的卡片由 UI 程序集（PeakMusic.UI）画，
@@ -414,11 +437,342 @@ namespace PeakMusic
 
         private void HandleRemotePlay(SongInfo song, string url, float startAt)
         {
-            if (_player == null) return;
-            Log.LogInfo(Tag + " 一起听：同步播放 " + song.Name + " - " + song.Artists);
-            _status = "一起听：" + song.Name;
-            _player.Play(song, url, startAt);
-            StartLyricFetch(song);
+            if (_player == null || song == null) return;
+
+            var sync = MusicSync.Instance;
+            bool local = sync != null && sync.LastPlayLocal;
+
+            // 同一首歌重复下发（房主给刚进房的人补发，或短暂重连）：
+            // 已经在放就只校准进度，绝不整首重载 —— 否则房里每个人都会断一下。
+            bool same = _remoteFollow && local && _remoteSong != null && _player.HasClip
+                        && (string.Equals(_remoteSong.Key, song.Key, StringComparison.Ordinal)
+                            || (string.Equals(_remoteSong.Name, song.Name, StringComparison.Ordinal)
+                                && string.Equals(_remoteSong.Artists, song.Artists, StringComparison.Ordinal)));
+            if (same)
+            {
+                _lastSyncSec = startAt;
+                _lastSyncAt = UnityEngine.Time.unscaledTime;
+                float drift = Mathf.Abs(_player.Time - startAt);
+                if (drift > 1.5f)
+                {
+                    Log.LogInfo(Tag + " 一起听（本地）：重复下发，校准 " + drift.ToString("F1") + "s");
+                    if (!_player.SeekTo(startAt) && !string.IsNullOrEmpty(url))
+                        _player.Play(song, url, startAt);
+                }
+                return;
+            }
+
+            _remoteFollow = local;
+            _remoteSong = song;
+            _remoteUrl = url ?? "";
+
+            if (!string.IsNullOrEmpty(url))
+            {
+                Log.LogInfo(Tag + " 一起听：同步播放 " + song.Name + " - " + song.Artists
+                            + (_remoteFollow ? "（本地模式·含直链）" : ""));
+                _status = (_remoteFollow ? "一起听（本地）：" : "一起听：") + song.Name;
+                _player.Play(song, url, startAt);
+                StartLyricFetch(song);
+                return;
+            }
+
+            // 房主那边取不到直链（会员/版权）：自己按「歌名 + 歌手 + 时长」找同版本
+            Log.LogInfo(Tag + " 一起听：无直链，自行搜索 " + song.Name + " - " + song.Artists);
+            _status = "一起听：正在找「" + song.Name + "」…";
+            StartRemoteResolve(song, startAt);
+        }
+
+        /// <summary>客机兜底：无直链时自己搜同版本；搜不到就只同步歌词（不发声）。</summary>
+        private void StartRemoteResolve(SongInfo song, float startAt)
+        {
+            int seq = ++_rrSeq;
+            _rrDone = false;
+            _rrSong = null;
+            _rrUrl = "";
+            _rrStartAt = startAt;
+            SongInfo want = song;
+
+            Task.Run(() =>
+            {
+                SongInfo hit = null; string u = "";
+                try
+                {
+                    var list = Client.SearchAsync(want.Platform, want.Name + " " + want.Artists, 12, 0)
+                                     .GetAwaiter().GetResult();
+                    hit = PickBestMatch(list, want.Name, want.Artists, want.DurationMs);
+                    if (hit != null)
+                    {
+                        var r = Client.GetUrlAsync(hit).GetAwaiter().GetResult();
+                        if (r != null && r.Code == 200 && !string.IsNullOrEmpty(r.Url)) u = r.Url;
+                    }
+                }
+                catch (Exception e) { Log.LogWarning(Tag + " 一起听：搜索失败 " + e.Message); }
+
+                _rrSong = hit;
+                _rrUrl = u;
+                _rrStartAt = startAt;
+                _rrSeq2 = seq;
+                _rrDone = true;
+            });
+        }
+
+        /// <summary>
+        /// 队友刚把整曲下完时，按「最近一次校准值 + 已经过去的时间」补跳一次 ——
+        /// 否则它会从广播那一刻的进度起播，比房主慢整整一个下载时长。
+        /// </summary>
+        private void TickRemoteCatchUp()
+        {
+            var p = _player;
+            bool has = p != null && p.HasClip && _remoteFollow;
+            if (has && !_hadClip && _lastSyncAt > 0f)
+            {
+                float target = _lastSyncSec + (UnityEngine.Time.unscaledTime - _lastSyncAt);
+                float drift = Mathf.Abs(p.Time - target);
+                if (drift > 0.6f) p.SeekTo(target);
+                Log.LogInfo(Tag + " 一起听（本地）：加载完成，补跳到 " + target.ToString("F1")
+                            + "s（差 " + drift.ToString("F1") + "s）");
+            }
+            _hadClip = has;
+        }
+
+        private void PollRemoteResolve()
+        {
+            if (!_rrDone) return;
+            _rrDone = false;
+            if (_rrSeq2 != _rrSeq) return;
+
+            if (_rrSong == null || string.IsNullOrEmpty(_rrUrl))
+            {
+                _status = "一起听：本机找不到这首歌（仅同步歌词）";
+                Log.LogWarning(Tag + " 一起听：本机没有可播的同版本 → 只显示歌词");
+                return;
+            }
+
+            Log.LogInfo(Tag + " 一起听：自行匹配到 " + _rrSong.Name + " - " + _rrSong.Artists);
+            _remoteSong = _rrSong;
+            _remoteUrl = _rrUrl;
+            _status = "一起听：" + _rrSong.Name;
+            _player.Play(_rrSong, _rrUrl, _rrStartAt);
+            StartLyricFetch(_rrSong);
+        }
+
+        /// <summary>本地模式的进度校准：偏差小就软跳，偏差大就整曲重载到目标进度。</summary>
+        private void HandleLocalSync(float seconds, bool playing)
+        {
+            var p = _player;
+            // 先记下来：队友从「收到指令」到「整曲下载完」要 5–20 秒，
+            // 这段时间 HasClip 还是 false，等加载完必须按这条最新值补跳一次。
+            _lastSyncSec = seconds;
+            _lastSyncAt = UnityEngine.Time.unscaledTime;
+
+            if (p == null || !_remoteFollow || !p.HasClip) return;
+
+            if (playing != p.IsPlaying)
+            {
+                p.TogglePause();
+                Log.LogInfo(Tag + " 一起听（本地）：" + (playing ? "继续" : "暂停"));
+            }
+            if (!playing) return;
+
+            float drift = Mathf.Abs(p.Time - seconds);
+            if (drift <= 0.35f) return;
+
+            if (drift > 2.5f && _remoteSong != null && !string.IsNullOrEmpty(_remoteUrl)
+                && _reloadTries < 2 && UnityEngine.Time.unscaledTime - _lastReloadAt > 20f)
+            {
+                _reloadTries++;
+                _lastReloadAt = UnityEngine.Time.unscaledTime;
+                Log.LogInfo(Tag + " 一起听（本地）：偏差 " + drift.ToString("F1")
+                            + "s，整曲重载到 " + seconds.ToString("F1") + "s（第 "
+                            + _reloadTries + " 次）");
+                p.Play(_remoteSong, _remoteUrl, seconds);
+                return;
+            }
+
+            if (!p.SeekTo(seconds))
+                Log.LogWarning(Tag + " 一起听（本地）：软跳未生效（流式音频不可跳），等下次重载");
+        }
+
+        /// <summary>
+        /// 本地模式 → 一起听（房主侧）。
+        /// 房主自己不播（声音本来就从网易云/QQ 出来），只做三件事：
+        ///   ① 换歌时「静默搜一次 + 取直链」，连歌名带直链广播出去（取不到就只发歌名）；
+        ///   ② 暂停/继续同步；
+        ///   ③ 每 3 秒报一次进度，队友用它校准。
+        /// </summary>
+        private void TickLocalBroadcast()
+        {
+            var sync = MusicSync.Instance;
+            var b = LocalBridge.Instance;
+            bool on = LocalMode && sync != null && sync.InRoom && sync.IsHost && sync.Enabled
+                      && b != null && b.Alive
+                      && (_player == null || !_player.HasClip)   // 自己在游戏里放歌时，走正常的广播
+                      && (Plugin.SyncLocalFollow == null || Plugin.SyncLocalFollow.Value);
+
+            if (!on)
+            {
+                if (_bcWasOn && sync != null && sync.CanBroadcast) sync.BroadcastStop();
+                _bcWasOn = false;
+                _bcKey = ""; _bcSong = null; _bcUrl = "";
+                _bcResolving = false; _bcHaveResult = false;
+                _bcCrowd = -1; _bcRebroadcastAt = 0f;
+                return;
+            }
+            _bcWasOn = true;
+
+            // ── 晚进房的人：只在换歌时广播的话，他永远等不到当前这首 ──
+            // （实测：队友 17:50 进房，房主 17:53 切歌他才第一次收到播放指令）
+            // 所以人数变多时，把「当前歌 + 直链 + 当前进度」补发一次。
+            int crowd = sync.ListenerCount;
+            if (crowd > _bcCrowd)
+            {
+                if (_bcSong != null) _bcRebroadcastAt = UnityEngine.Time.unscaledTime + 1.2f;
+                if (_bcCrowd >= 0 && _bcSong != null)
+                    Log.LogInfo(Tag + " 有人新进房（" + crowd + " 人），准备补发当前歌曲");
+            }
+            _bcCrowd = crowd;
+
+            string key = b.SongKey;
+            if (string.IsNullOrEmpty(key)) { _bcKey = ""; return; }
+
+            if (key != _bcKey && !_bcResolving)
+            {
+                _bcKey = key;
+                _bcResolving = true;
+                _bcHaveResult = false;
+
+                string title = b.Title, artist = b.Artist;
+                double lenMs = b.LengthMs;
+                Platform plat = GuessPlatform(b.Source);
+                string kw = (title + " " + artist).Trim();
+                Log.LogInfo(Tag + " 本地模式 → 一起听：解析「" + kw + "」");
+
+                Task.Run(() =>
+                {
+                    SongInfo hit = null; string u = "";
+                    try
+                    {
+                        var list = Client.SearchAsync(plat, kw, 12, 0).GetAwaiter().GetResult();
+                        hit = PickBestMatch(list, title, artist, lenMs);
+                        if (hit != null)
+                        {
+                            var r = Client.GetUrlAsync(hit).GetAwaiter().GetResult();
+                            if (r != null && r.Code == 200 && !string.IsNullOrEmpty(r.Url)) u = r.Url;
+                        }
+                    }
+                    catch (Exception e) { Log.LogWarning(Tag + " 本地模式解析失败：" + e.Message); }
+
+                    _bcResultSong = hit;
+                    _bcResultUrl = u;
+                    _bcHaveResult = true;
+                });
+            }
+
+            if (_bcResolving && _bcHaveResult)
+            {
+                _bcResolving = false;
+                _bcHaveResult = false;
+
+                SongInfo song = _bcResultSong;
+                if (song == null)
+                {
+                    // 搜不到就发一条「只有歌名」的，队友那边自己搜
+                    song = new SongInfo
+                    {
+                        Name = b.Title,
+                        Artists = b.Artist,
+                        Platform = GuessPlatform(b.Source),
+                        DurationMs = (long)b.LengthMs,
+                    };
+                }
+
+                _bcSong = song;
+                _bcUrl = _bcResultUrl ?? "";
+                _bcWasPlaying = b.Playing;
+                float startAt = (float)(b.PositionMsNow / 1000.0);
+                sync.BroadcastPlay(song, _bcUrl, startAt, true);
+                _bcNextSync = UnityEngine.Time.unscaledTime + 3f;
+                _status = "一起听（本地）：" + song.Name;
+                Log.LogInfo(Tag + " 本地模式 → 一起听：已广播 " + song.Name
+                            + (_bcUrl.Length > 0 ? "（含直链）" : "（无直链，队友自搜）"));
+            }
+
+            if (!_bcResolving && b.Playing != _bcWasPlaying)
+            {
+                _bcWasPlaying = b.Playing;
+                sync.BroadcastPause(!b.Playing);
+                Log.LogInfo(Tag + " 本地模式 → 一起听：" + (b.Playing ? "继续" : "暂停"));
+            }
+
+            // 补发当前歌：给刚进房的人一次完整指令（老队友收到同一首不会重载，见 HandleRemotePlay）
+            if (!_bcResolving && _bcSong != null && _bcRebroadcastAt > 0f
+                && UnityEngine.Time.unscaledTime >= _bcRebroadcastAt)
+            {
+                _bcRebroadcastAt = 0f;
+                sync.BroadcastPlay(_bcSong, _bcUrl, (float)(b.PositionMsNow / 1000.0), true);
+                _bcNextSync = UnityEngine.Time.unscaledTime + 3f;
+                Log.LogInfo(Tag + " 有人新进房，补发当前歌曲：" + _bcSong.Name
+                            + " @ " + (b.PositionMsNow / 1000.0).ToString("F1") + "s");
+            }
+
+            if (!_bcResolving && UnityEngine.Time.unscaledTime >= _bcNextSync)
+            {
+                _bcNextSync = UnityEngine.Time.unscaledTime + 3f;
+                sync.BroadcastLocalSync((float)(b.PositionMsNow / 1000.0), b.Playing);
+            }
+        }
+
+        /// <summary>按歌名/歌手/时长挑最像的版本，排除 live/伴奏/remix。</summary>
+        private static SongInfo PickBestMatch(List<SongInfo> list, string title, string artist, double lenMs)
+        {
+            if (list == null || list.Count == 0) return null;
+            string t = (title ?? "").Trim();
+            string a = (artist ?? "").Trim();
+            string aMain = a;
+            int cut = aMain.IndexOfAny(new[] { '/', '&', ',' });
+            if (cut > 0) aMain = aMain.Substring(0, cut).Trim();
+            if (t.Length == 0) return null;
+
+            SongInfo best = null;
+            double bestScore = -1;
+            for (int i = 0; i < list.Count; i++)
+            {
+                SongInfo s = list[i];
+                if (s == null) continue;
+                string sn = (s.Name ?? "").Trim();
+                if (sn.Length == 0) continue;
+
+                double score = 0;
+                if (string.Equals(sn, t, StringComparison.OrdinalIgnoreCase)) score += 100;
+                else if (sn.IndexOf(t, StringComparison.OrdinalIgnoreCase) >= 0
+                         || t.IndexOf(sn, StringComparison.OrdinalIgnoreCase) >= 0) score += 60;
+                else continue;
+
+                string sa = s.Artists ?? "";
+                if (aMain.Length > 0 && sa.IndexOf(aMain, StringComparison.OrdinalIgnoreCase) >= 0) score += 40;
+
+                if (lenMs > 5000 && s.DurationMs > 5000)
+                {
+                    double d = Math.Abs(s.DurationMs - lenMs) / 1000.0;
+                    if (d <= 3) score += 30;
+                    else if (d <= 8) score += 10;
+                    else score -= 25;
+                }
+
+                string low = sn.ToLowerInvariant();
+                if (low.Contains("live") || low.Contains("伴奏") || low.Contains("remix")
+                    || low.Contains("cover") || low.Contains("翻唱")) score -= 20;
+
+                if (score > bestScore) { bestScore = score; best = s; }
+            }
+            return bestScore >= 60 ? best : null;
+        }
+
+        private static Platform GuessPlatform(string source)
+        {
+            if (!string.IsNullOrEmpty(source)
+                && source.IndexOf("qq", StringComparison.OrdinalIgnoreCase) >= 0) return Platform.QQ;
+            return Platform.Netease;
         }
 
         private void HandleRemotePause(bool paused)
@@ -437,14 +791,18 @@ namespace PeakMusic
         private void HandleRemoteStop()
         {
             if (_player == null) return;
+            _remoteFollow = false;      // 房主停了：恢复正常，歌词层也会退回本地/在线模式
+            _reloadTries = 0;
             _player.Stop();
         }
 
         private void HandleRemoteSeek(float seconds)
         {
             if (_player == null || !_player.HasClip) return;
-            // 播放器只在整曲下载模式支持 seek；这里尽量对齐，失败也不致命
             Log.LogInfo(Tag + " 一起听：进度对齐 " + seconds.ToString("F1") + "s");
+            if (_player.SeekTo(seconds)) return;
+            if (_remoteSong != null && !string.IsNullOrEmpty(_remoteUrl))
+                _player.Play(_remoteSong, _remoteUrl, seconds);
         }
 
         private void HandleQueueAdd(SongInfo song, string requester, string url)
@@ -497,6 +855,7 @@ namespace PeakMusic
                 sync.OnRemotePause += HandleRemotePause;
                 sync.OnRemoteStop += HandleRemoteStop;
                 sync.OnRemoteSeek += HandleRemoteSeek;
+                sync.OnLocalSync += HandleLocalSync;
                 sync.OnQueueAdd += HandleQueueAdd;
                 sync.OnQueueState += HandleQueueState;
                 Log.LogInfo(Tag + " 一起听指令订阅完成");
@@ -557,6 +916,9 @@ namespace PeakMusic
 
             SamplePerf();
             UpdateIsland();          // 面板关着也要算：岛是独立于面板的
+            TickLocalBroadcast();    // 房主：本地模式 → 一起听（面板关着也要广播）
+            PollRemoteResolve();     // 客机：无直链时自己搜歌的结果回收
+            TickRemoteCatchUp();     // 客机：整曲下完后按最新进度补跳
 
             if (!_open) return;
 
@@ -1471,6 +1833,8 @@ namespace PeakMusic
             if (Hit(_rLyricEdge)) { CycleLyricEdge(); return; }
             if (Hit(_rLyricColor)) { StylePickerOpen = !StylePickerOpen; return; }
             if (Hit(_rLyricBright)) { CycleLyricBright(); return; }
+            if (Hit(_rLyricFont)) { CycleLyricFont(); return; }
+            if (Hit(_rLyricDepth)) { CycleLyricDepth(); return; }
             if (Hit(_rLyricHeight)) { CycleLyricHeight(); return; }
 
             for (int i = 0; i < Platforms.All.Length; i++)
@@ -1847,6 +2211,9 @@ namespace PeakMusic
             _taskError = null;
             _pendingUrl = null;
             _pendingSong = song;
+            _remoteFollow = false;      // 自己点歌 = 退出「跟随房主」
+            _remoteSong = null;
+            _remoteUrl = "";
             _status = "取播放地址：" + song.Name;
             Log.LogInfo(Tag + " 取播放地址[" + Platforms.DisplayName(song.Platform) + "] " +
                         song.Key + " " + song.Name + " - " + song.Artists);
@@ -1911,6 +2278,8 @@ namespace PeakMusic
             if (_player == null) return;
             _status = "开始播放：" + song.Name;
             Log.LogInfo(Tag + " 用点歌人直链播放：" + song.Name + " - " + song.Artists);
+            _remoteFollow = false;
+            _reloadTries = 0;
             _player.Play(song, url, 0f);
             StartLyricFetch(song);
             var sync = MusicSync.Instance;
@@ -2309,6 +2678,9 @@ namespace PeakMusic
             MusicPlayer p = _player;
             SongInfo cur = p != null ? p.Current : null;
 
+            // 一起听（本地模式）：歌是房主在控，播完别自己往下切，等房主的下一首
+            if (auto && _remoteFollow) { _status = "等房主切歌…"; return; }
+
             // ① 单曲循环：只在「自动播完」时原地重放；手动点下一首要往下走
             if (auto && RepeatOne && cur != null)
             {
@@ -2585,6 +2957,8 @@ namespace PeakMusic
             _rLyricHeight = new Rect(_rNav.x + 6f, _rNav.yMax - 228f, NavW - 12f, 42f);
             _rLyricColor = new Rect(_rNav.x + 6f, _rNav.yMax - 272f, NavW - 12f, 42f);
             _rLyricBright = new Rect(_rNav.x + 6f, _rNav.yMax - 316f, NavW - 12f, 42f);
+            _rLyricFont = new Rect(_rNav.x + 6f, _rNav.yMax - 360f, NavW - 12f, 42f);
+            _rLyricDepth = new Rect(_rNav.x + 6f, _rNav.yMax - 404f, NavW - 12f, 42f);
 
             // ── 主区从导航右侧开始 ──
             float px = _rNav.xMax + 28f;
@@ -3063,6 +3437,44 @@ namespace PeakMusic
         }
 
         /// <summary>歌词左右位置循环：18% → 25% → 30% → 35% → 40%（句子中心离屏幕边缘的比例，越小越靠边）。</summary>
+        /// <summary>
+        /// 歌词字体循环：自动 → 系统里能找到的中/繁/日/韩字体 → 自动。
+        /// 列表来自 FontLibrary（注册表 + 字体目录），所以玩家自己装的字体也能选到。
+        /// </summary>
+        private void CycleLyricFont()
+        {
+            var opts = FontLibrary.Cycle;
+            if (opts == null || opts.Count <= 1)
+            {
+                _status = "系统里没找到可用的字体文件";
+                Log.LogWarning(Tag + " 没有可用字体：FontLibrary.Cycle 只有「自动」");
+                return;
+            }
+
+            string cur = Plugin.LyricFont != null ? (Plugin.LyricFont.Value ?? "") : "";
+            int idx = 0;
+            for (int i = 0; i < opts.Count; i++)
+                if (string.Equals(opts[i].Family, cur, StringComparison.OrdinalIgnoreCase)) { idx = i; break; }
+
+            idx = (idx + 1) % opts.Count;
+            if (Plugin.LyricFont != null) Plugin.LyricFont.Value = opts[idx].Family;
+            WorldLyricRenderer.FontRevision++;      // 让渲染层重建字体图集（否则要等下一句）
+
+            _status = "歌词字体 → " + (opts[idx].Family.Length == 0 ? "自动" : opts[idx].Label);
+            Log.LogInfo(Tag + " 歌词字体 → " + (opts[idx].Family.Length == 0 ? "自动" : opts[idx].Family)
+                        + "（共 " + opts.Count + " 个可选）");
+        }
+
+        /// <summary>歌词立体感循环：关 → 轻（倒角 + 轻斜）→ 强（厚倒角 + 明显倾斜）。</summary>
+        private void CycleLyricDepth()
+        {
+            int cur = Plugin.LyricDepth != null ? Plugin.LyricDepth.Value : 1;
+            int next = (cur + 1) % 3;
+            if (Plugin.LyricDepth != null) Plugin.LyricDepth.Value = next;
+            _status = "歌词立体感 → " + (next == 0 ? "关（纯平面）" : next == 1 ? "轻（倒角 + 轻斜）" : "强（厚倒角 + 明显倾斜）");
+            Log.LogInfo(Tag + " 歌词立体感 → " + next);
+        }
+
         private void CycleLyricEdge()
         {
             float[] steps = { 0.18f, 0.25f, 0.30f, 0.35f, 0.40f };
@@ -3557,6 +3969,7 @@ namespace PeakMusic
                 sync.OnRemotePause -= HandleRemotePause;
                 sync.OnRemoteStop -= HandleRemoteStop;
                 sync.OnRemoteSeek -= HandleRemoteSeek;
+                sync.OnLocalSync -= HandleLocalSync;
                 sync.OnQueueAdd -= HandleQueueAdd;
                 sync.OnQueueState -= HandleQueueState;
             }
